@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "final-project"
+version = "0.1.0"
+description = "Mammography submission pipeline scaffold"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "PyYAML>=6.0.2",
+]
+
+[project.scripts]
+final-project = "final_project.cli:main"
+
+[project.optional-dependencies]
+train = [
+    "numpy>=2.2.0",
+    "pandas>=2.2.0",
+    "Pillow>=11.0.0",
+    "scikit-learn>=1.6.0",
+    "timm>=1.0.15",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+final_project = ["py.typed"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

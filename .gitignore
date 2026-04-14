@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Environment variables
+.env*.local
+
+# Pytest / Coverage / Linting
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+
+# Datasets, Notebooks, and Weights
+*.csv
+*.zip
+*.docx
+train_img/
+test_img/
+outputs/
+models/
+checkpoints/
+
+# Temporary directories and Agent folders
+.claude/
+.omc/
+.tmp_research/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

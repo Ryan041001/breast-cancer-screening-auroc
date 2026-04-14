@@ -1,0 +1,21 @@
+experiment:
+  name: smoke
+
+paths:
+  project_root: ..
+  train_csv: train.csv
+  train_images: train_img
+  test_images: test_img
+  submission_template: name_sid_submission.csv
+  output_root: outputs
+
+runtime:
+  seed: 7
+  device: cuda
+
+train:
+  folds: 2
+  batch_size: 2
+  image_size: 384
+  epochs: 1
+  num_workers: 0

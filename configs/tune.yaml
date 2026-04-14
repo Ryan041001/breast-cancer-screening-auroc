@@ -1,0 +1,21 @@
+experiment:
+  name: tune
+
+paths:
+  project_root: ..
+  train_csv: train.csv
+  train_images: train_img
+  test_images: test_img
+  submission_template: name_sid_submission.csv
+  output_root: outputs
+
+runtime:
+  seed: 123
+  device: cuda
+
+train:
+  folds: 5
+  batch_size: 4
+  image_size: 512
+  epochs: 12
+  num_workers: 0
