@@ -7,7 +7,29 @@ from final_project.config import AppConfig, load_config
 
 
 def _write_config(path: Path, payload: dict[str, object]) -> None:
-    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    _ = path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+
+def _base_payload() -> dict[str, object]:
+    return {
+        "experiment": {"name": "demo"},
+        "paths": {
+            "project_root": ".",
+            "train_csv": "train.csv",
+            "train_images": "train_img",
+            "test_images": "test_img",
+            "submission_template": "name_sid_submission.csv",
+            "output_root": "outputs",
+        },
+        "runtime": {"seed": 7, "device": "cpu"},
+        "train": {
+            "folds": 5,
+            "batch_size": 4,
+            "image_size": 384,
+            "epochs": 1,
+            "num_workers": 0,
+        },
+    }
 
 
 def test_load_config_returns_expected_fields() -> None:
@@ -25,6 +47,236 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.runtime.device == "cuda"
     assert config.train.batch_size == 2
     assert config.train.image_size == 384
+    assert config.train.transform_profile == "baseline"
+    assert config.paths.external_data_root is None
+    assert config.train.external_warmup_epochs == 0
+
+
+def test_load_config_loads_default_linear_fusion_head_values() -> None:
+    config = load_config(Path("configs/smoke.yaml"))
+
+    assert config.train.fusion_head_variant == "linear"
+    assert config.train.fusion_hidden_dim == 512
+    assert config.train.fusion_dropout == 0.0
+    assert config.train.fusion_activation == "gelu"
+    assert config.train.fusion_layer_norm is False
+    assert config.train.fusion_residual is False
+    assert config.train.external_warmup_batch_size == 16
+    assert config.train.external_warmup_learning_rate == 0.001
+
+
+def test_load_config_resolves_external_warmup_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "external.yaml"
+    payload = _base_payload()
+    payload["paths"] = {
+        **payload["paths"],
+        "external_data_root": "MammoNet32k_new/MammoNet32k_new",
+    }
+    payload["train"] = {
+        **payload["train"],
+        "external_warmup_epochs": 2,
+        "external_warmup_batch_size": 32,
+        "external_warmup_learning_rate": 5e-4,
+        "external_warmup_max_samples": 128,
+    }
+    _write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.paths.external_data_root == (
+        tmp_path / "MammoNet32k_new" / "MammoNet32k_new"
+    )
+    assert config.paths.external_catalog == (
+        tmp_path / "MammoNet32k_new" / "MammoNet32k_new" / "catalog.csv"
+    )
+    assert config.paths.external_splits_dir == (
+        tmp_path / "MammoNet32k_new" / "MammoNet32k_new" / "splits"
+    )
+    assert config.train.external_warmup_epochs == 2
+    assert config.train.external_warmup_batch_size == 32
+    assert config.train.external_warmup_learning_rate == pytest.approx(5e-4)
+    assert config.train.external_warmup_max_samples == 128
+
+
+def test_load_config_rejects_external_warmup_without_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "bad_external.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        "external_warmup_epochs": 1,
+    }
+    _write_config(config_path, payload)
+
+    with pytest.raises(ValueError, match="External warmup requires"):
+        _ = load_config(config_path)
+
+
+def test_load_config_resolves_project_root_from_sibling_worktree(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "Final_Project"
+    config_path = (
+        repo_root
+        / ".worktrees"
+        / "fusion-head-tuning-20260415"
+        / "configs"
+        / "smoke.yaml"
+    )
+    config_path.parent.mkdir(parents=True)
+    _write_config(
+        config_path,
+        {
+            "experiment": {"name": "smoke"},
+            "paths": {
+                "project_root": "..",
+                "train_csv": "train.csv",
+                "train_images": "train_img",
+                "test_images": "test_img",
+                "submission_template": "name_sid_submission.csv",
+                "output_root": "outputs",
+            },
+            "runtime": {"seed": 7, "device": "cuda"},
+            "train": {
+                "folds": 5,
+                "batch_size": 2,
+                "image_size": 384,
+                "epochs": 1,
+                "num_workers": 0,
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.paths.project_root == repo_root
+    assert config.paths.train_csv == repo_root / "train.csv"
+
+
+@pytest.mark.parametrize("fusion_head_variant", ["linear", "mlp"])
+def test_load_config_accepts_supported_fusion_head_variants(
+    tmp_path: Path,
+    fusion_head_variant: str,
+) -> None:
+    config_path = tmp_path / f"{fusion_head_variant}.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        "fusion_head_variant": fusion_head_variant,
+    }
+    _write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.train.fusion_head_variant == fusion_head_variant
+
+
+def test_load_config_rejects_unknown_fusion_head_variant(tmp_path: Path) -> None:
+    bad_config = tmp_path / "bad.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        "fusion_head_variant": "transformer",
+    }
+    _write_config(bad_config, payload)
+
+    with pytest.raises(ValueError, match="fusion_head_variant"):
+        _ = load_config(bad_config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("fusion_hidden_dim", 0, "fusion_hidden_dim"),
+        ("fusion_hidden_dim", -1, "fusion_hidden_dim"),
+        ("fusion_dropout", -0.1, "fusion_dropout"),
+        ("fusion_dropout", 1.1, "fusion_dropout"),
+        ("external_warmup_batch_size", 0, "external_warmup_batch_size"),
+        ("external_warmup_num_workers", -1, "external_warmup_num_workers"),
+        ("external_warmup_learning_rate", 0.0, "external_warmup_learning_rate"),
+        ("external_warmup_max_samples", 0, "external_warmup_max_samples"),
+    ],
+)
+def test_load_config_rejects_invalid_fusion_head_numeric_values(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    bad_config = tmp_path / f"{field}.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        field: value,
+    }
+    _write_config(bad_config, payload)
+
+    with pytest.raises(ValueError, match=match):
+        _ = load_config(bad_config)
+
+
+@pytest.mark.parametrize("transform_profile", ["baseline", "normaug"])
+def test_load_config_accepts_supported_transform_profiles(
+    tmp_path: Path,
+    transform_profile: str,
+) -> None:
+    config_path = tmp_path / f"{transform_profile}.yaml"
+    _write_config(
+        config_path,
+        {
+            "experiment": {"name": "demo"},
+            "paths": {
+                "project_root": ".",
+                "train_csv": "train.csv",
+                "train_images": "train_img",
+                "test_images": "test_img",
+                "submission_template": "name_sid_submission.csv",
+                "output_root": "outputs",
+            },
+            "runtime": {"seed": 7, "device": "cpu"},
+            "train": {
+                "folds": 5,
+                "batch_size": 4,
+                "image_size": 384,
+                "epochs": 1,
+                "num_workers": 0,
+                "transform_profile": transform_profile,
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.train.transform_profile == transform_profile
+
+
+def test_load_config_rejects_unknown_transform_profile(tmp_path: Path) -> None:
+    bad_config = tmp_path / "bad.yaml"
+    _write_config(
+        bad_config,
+        {
+            "experiment": {"name": "demo"},
+            "paths": {
+                "project_root": ".",
+                "train_csv": "train.csv",
+                "train_images": "train_img",
+                "test_images": "test_img",
+                "submission_template": "name_sid_submission.csv",
+                "output_root": "outputs",
+            },
+            "runtime": {"seed": 7, "device": "cpu"},
+            "train": {
+                "folds": 5,
+                "batch_size": 4,
+                "image_size": 384,
+                "epochs": 1,
+                "num_workers": 0,
+                "transform_profile": "unknown",
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="transform_profile"):
+        _ = load_config(bad_config)
 
 
 def test_load_config_rejects_missing_required_sections(tmp_path: Path) -> None:

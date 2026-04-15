@@ -51,3 +51,19 @@ def read_prediction_table(predictions_csv: str | Path) -> dict[str, float]:
     with predictions_path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     return {row["breast_id"]: float(row["pred_score"]) for row in rows}
+
+
+def read_prediction_table_strict(predictions_csv: str | Path) -> dict[str, float]:
+    """Read predictions, rejecting any duplicate breast_id entries."""
+    predictions_path = Path(predictions_csv)
+    with predictions_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    result: dict[str, float] = {}
+    for row in rows:
+        breast_id = row["breast_id"]
+        if breast_id in result:
+            raise ValueError(
+                f"Duplicate breast_id '{breast_id}' in {predictions_path}"
+            )
+        result[breast_id] = float(row["pred_score"])
+    return result

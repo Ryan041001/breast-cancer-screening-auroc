@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader
 
 from ..data.dataset import PairedBreastDataset, PairedBreastSample
 from ..data.manifest import BreastManifestRecord
-from ..model.fusion import PairedBreastModel
+from ..data.transforms import TransformProfile
+from ..model.fusion import FusionHeadConfig, PairedBreastModel
 
 
 DEFAULT_BACKBONE_NAME = "efficientnet_b0"
@@ -28,24 +29,39 @@ def build_prediction_loader(
     batch_size: int,
     num_workers: int,
     *,
+    transform_profile: TransformProfile = "baseline",
     use_cuda: bool = False,
 ) -> DataLoader[PredictionBatch]:
     dataset = PairedBreastDataset(
-        records=records, image_size=image_size, training=False
+        records=records,
+        image_size=image_size,
+        training=False,
+        transform_profile=transform_profile,
     )
-    loader_kwargs: dict[str, object] = {
-        "batch_size": batch_size,
-        "shuffle": False,
-        "num_workers": num_workers,
-        "collate_fn": _collate_prediction_samples,
-        "pin_memory": use_cuda,
-    }
     if num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
+        return cast(
+            DataLoader[PredictionBatch],
+            DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                collate_fn=_collate_prediction_samples,
+                pin_memory=use_cuda,
+                persistent_workers=True,
+                prefetch_factor=2,
+            ),
+        )
     return cast(
         DataLoader[PredictionBatch],
-        DataLoader(dataset, **loader_kwargs),  # type: ignore[arg-type]
+        DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=_collate_prediction_samples,
+            pin_memory=use_cuda,
+        ),
     )
 
 
@@ -54,6 +70,7 @@ def load_model_from_checkpoint(
     *,
     device: torch.device | str,
     backbone_name: str = DEFAULT_BACKBONE_NAME,
+    fusion_head_config: FusionHeadConfig | None = None,
 ) -> nn.Module:
     checkpoint = cast(
         dict[str, object],
@@ -62,7 +79,21 @@ def load_model_from_checkpoint(
     resolved_backbone_name = checkpoint.get("backbone_name")
     if not isinstance(resolved_backbone_name, str):
         resolved_backbone_name = backbone_name
-    model = PairedBreastModel(backbone_name=resolved_backbone_name, pretrained=False)
+
+    # Prefer checkpoint-saved config, fallback to caller-provided, then baseline
+    saved_config_dict = checkpoint.get("fusion_head_config")
+    if isinstance(saved_config_dict, dict):
+        resolved_fusion_config = FusionHeadConfig.from_dict(saved_config_dict)
+    elif fusion_head_config is not None:
+        resolved_fusion_config = fusion_head_config
+    else:
+        resolved_fusion_config = FusionHeadConfig.baseline()
+
+    model = PairedBreastModel(
+        backbone_name=resolved_backbone_name,
+        pretrained=False,
+        fusion_head_config=resolved_fusion_config,
+    )
     model.load_state_dict(cast(dict[str, torch.Tensor], checkpoint["model_state_dict"]))
     model.to(device)
     model.eval()

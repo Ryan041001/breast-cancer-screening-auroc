@@ -20,6 +20,9 @@ REQUIRED_PATH_KEYS = (
 )
 REQUIRED_RUNTIME_KEYS = ("seed", "device")
 REQUIRED_TRAIN_KEYS = ("folds", "batch_size", "image_size", "epochs", "num_workers")
+ALLOWED_TRANSFORM_PROFILES = ("baseline", "normaug")
+ALLOWED_FUSION_HEAD_VARIANTS = ("linear", "mlp")
+ALLOWED_FUSION_ACTIVATIONS = ("gelu", "relu")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +38,9 @@ class PathsConfig:
     test_images: Path
     submission_template: Path
     output_root: Path
+    external_data_root: Path | None = None
+    external_catalog: Path | None = None
+    external_splits_dir: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +56,18 @@ class TrainConfig:
     image_size: int
     epochs: int
     num_workers: int
+    transform_profile: str = "baseline"
+    fusion_head_variant: str = "linear"
+    fusion_hidden_dim: int = 512
+    fusion_dropout: float = 0.0
+    fusion_activation: str = "gelu"
+    fusion_layer_norm: bool = False
+    fusion_residual: bool = False
+    external_warmup_epochs: int = 0
+    external_warmup_batch_size: int = 32
+    external_warmup_num_workers: int = 0
+    external_warmup_learning_rate: float = 1e-3
+    external_warmup_max_samples: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +89,17 @@ def _resolve_path(base_dir: Path, raw_value: str) -> Path:
     if candidate.is_absolute():
         return candidate.resolve()
     return (base_dir / candidate).resolve()
+
+
+def _resolve_project_root(config_file: Path, raw_value: str) -> Path:
+    candidate = _resolve_path(config_file.parent, raw_value)
+    worktrees_dir = next(
+        (ancestor for ancestor in config_file.parents if ancestor.name == ".worktrees"),
+        None,
+    )
+    if worktrees_dir is not None and candidate.is_relative_to(worktrees_dir):
+        return worktrees_dir.parent
+    return candidate
 
 
 def _missing_keys(
@@ -104,9 +133,24 @@ def _require_int_at_least(payload: Mapping[str, object], key: str, minimum: int)
     return value
 
 
+def _optional_resolved_path(
+    base_dir: Path,
+    payload: Mapping[str, object],
+    key: str,
+) -> Path | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Config key '{key}' must be a string")
+    return _resolve_path(base_dir, value)
+
+
 def load_config(config_path: str | Path) -> AppConfig:
     config_file = Path(config_path).resolve()
-    raw_payload = cast(object, yaml.safe_load(config_file.read_text(encoding="utf-8")))
+    raw_payload: object = cast(
+        object, yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    )
     if raw_payload is None:
         raw_payload = {}
     payload = _ensure_mapping(raw_payload, "root")
@@ -145,10 +189,125 @@ def load_config(config_path: str | Path) -> AppConfig:
         missing = ", ".join(missing_train_keys)
         raise ValueError(f"Missing required train config keys: {missing}")
 
-    project_root = _resolve_path(
-        config_file.parent,
+    project_root = _resolve_project_root(
+        config_file,
         _require_string(paths_payload, "project_root"),
     )
+    transform_profile = train_payload.get("transform_profile", "baseline")
+    if not isinstance(transform_profile, str):
+        raise ValueError("Config key 'transform_profile' must be a string")
+    if transform_profile not in ALLOWED_TRANSFORM_PROFILES:
+        allowed = ", ".join(ALLOWED_TRANSFORM_PROFILES)
+        raise ValueError(f"Config key 'transform_profile' must be one of: {allowed}")
+
+    # --- fusion head settings (backward-compatible defaults) ---
+    fusion_head_variant = str(train_payload.get("fusion_head_variant", "linear"))
+    if fusion_head_variant not in ALLOWED_FUSION_HEAD_VARIANTS:
+        allowed = ", ".join(ALLOWED_FUSION_HEAD_VARIANTS)
+        raise ValueError(
+            f"Config key 'fusion_head_variant' must be one of: {allowed}"
+        )
+
+    fusion_hidden_dim_raw = train_payload.get("fusion_hidden_dim", 512)
+    if not isinstance(fusion_hidden_dim_raw, int) or isinstance(fusion_hidden_dim_raw, bool):
+        raise ValueError("Config key 'fusion_hidden_dim' must be an integer")
+    if fusion_hidden_dim_raw < 1:
+        raise ValueError("Config key 'fusion_hidden_dim' must be at least 1")
+    fusion_hidden_dim = fusion_hidden_dim_raw
+
+    fusion_dropout_raw = train_payload.get("fusion_dropout", 0.0)
+    if isinstance(fusion_dropout_raw, bool):
+        raise ValueError("Config key 'fusion_dropout' must be a number")
+    if not isinstance(fusion_dropout_raw, (int, float)):
+        raise ValueError("Config key 'fusion_dropout' must be a number")
+    fusion_dropout = float(fusion_dropout_raw)
+    if not (0.0 <= fusion_dropout <= 1.0):
+        raise ValueError("Config key 'fusion_dropout' must be between 0.0 and 1.0")
+
+    fusion_activation = str(train_payload.get("fusion_activation", "gelu"))
+    if fusion_activation not in ALLOWED_FUSION_ACTIVATIONS:
+        allowed = ", ".join(ALLOWED_FUSION_ACTIVATIONS)
+        raise ValueError(
+            f"Config key 'fusion_activation' must be one of: {allowed}"
+        )
+
+    fusion_layer_norm = bool(train_payload.get("fusion_layer_norm", False))
+    fusion_residual = bool(train_payload.get("fusion_residual", False))
+
+    external_warmup_epochs = _require_int_at_least(
+        {"external_warmup_epochs": train_payload.get("external_warmup_epochs", 0)},
+        "external_warmup_epochs",
+        0,
+    )
+    external_warmup_batch_size = _require_int_at_least(
+        {
+            "external_warmup_batch_size": train_payload.get(
+                "external_warmup_batch_size", 32
+            )
+        },
+        "external_warmup_batch_size",
+        1,
+    )
+    external_warmup_num_workers = _require_int_at_least(
+        {
+            "external_warmup_num_workers": train_payload.get(
+                "external_warmup_num_workers", 0
+            )
+        },
+        "external_warmup_num_workers",
+        0,
+    )
+    external_warmup_learning_rate_raw = train_payload.get(
+        "external_warmup_learning_rate", 1e-3
+    )
+    if isinstance(external_warmup_learning_rate_raw, bool):
+        raise ValueError("Config key 'external_warmup_learning_rate' must be a number")
+    if not isinstance(external_warmup_learning_rate_raw, (int, float)):
+        raise ValueError("Config key 'external_warmup_learning_rate' must be a number")
+    external_warmup_learning_rate = float(external_warmup_learning_rate_raw)
+    if external_warmup_learning_rate <= 0.0:
+        raise ValueError(
+            "Config key 'external_warmup_learning_rate' must be greater than 0.0"
+        )
+
+    external_warmup_max_samples_raw = train_payload.get("external_warmup_max_samples")
+    if external_warmup_max_samples_raw is None:
+        external_warmup_max_samples = None
+    else:
+        if (
+            not isinstance(external_warmup_max_samples_raw, int)
+            or isinstance(external_warmup_max_samples_raw, bool)
+        ):
+            raise ValueError(
+                "Config key 'external_warmup_max_samples' must be an integer"
+            )
+        if external_warmup_max_samples_raw < 1:
+            raise ValueError(
+                "Config key 'external_warmup_max_samples' must be at least 1"
+            )
+        external_warmup_max_samples = external_warmup_max_samples_raw
+
+    external_data_root = _optional_resolved_path(project_root, paths_payload, "external_data_root")
+    external_catalog = _optional_resolved_path(project_root, paths_payload, "external_catalog")
+    external_splits_dir = _optional_resolved_path(
+        project_root,
+        paths_payload,
+        "external_splits_dir",
+    )
+    if external_data_root is not None:
+        if external_catalog is None:
+            external_catalog = external_data_root / "catalog.csv"
+        if external_splits_dir is None:
+            external_splits_dir = external_data_root / "splits"
+    if external_warmup_epochs > 0 and (
+        external_data_root is None
+        or external_catalog is None
+        or external_splits_dir is None
+    ):
+        raise ValueError(
+            "External warmup requires 'paths.external_data_root' or explicit "
+            "'external_catalog' and 'external_splits_dir' values"
+        )
 
     return AppConfig(
         experiment=ExperimentConfig(name=_require_string(experiment_payload, "name")),
@@ -174,6 +333,9 @@ def load_config(config_path: str | Path) -> AppConfig:
                 project_root,
                 _require_string(paths_payload, "output_root"),
             ),
+            external_data_root=external_data_root,
+            external_catalog=external_catalog,
+            external_splits_dir=external_splits_dir,
         ),
         runtime=RuntimeConfig(
             seed=_require_int(runtime_payload, "seed"),
@@ -185,5 +347,17 @@ def load_config(config_path: str | Path) -> AppConfig:
             image_size=_require_int_at_least(train_payload, "image_size", 1),
             epochs=_require_int_at_least(train_payload, "epochs", 1),
             num_workers=_require_int_at_least(train_payload, "num_workers", 0),
+            transform_profile=transform_profile,
+            fusion_head_variant=fusion_head_variant,
+            fusion_hidden_dim=fusion_hidden_dim,
+            fusion_dropout=fusion_dropout,
+            fusion_activation=fusion_activation,
+            fusion_layer_norm=fusion_layer_norm,
+            fusion_residual=fusion_residual,
+            external_warmup_epochs=external_warmup_epochs,
+            external_warmup_batch_size=external_warmup_batch_size,
+            external_warmup_num_workers=external_warmup_num_workers,
+            external_warmup_learning_rate=external_warmup_learning_rate,
+            external_warmup_max_samples=external_warmup_max_samples,
         ),
     )

@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 
 from final_project.data.manifest import BreastManifestRecord
 from final_project.data.preprocess import preprocess_view_image
-from final_project.data.transforms import build_image_transform
+from final_project.data.transforms import TransformProfile, build_image_transform
 
 
 class PairedBreastSample(TypedDict):
@@ -26,10 +26,13 @@ class PairedBreastDataset(Dataset[PairedBreastSample]):
         records: Sequence[BreastManifestRecord],
         image_size: int,
         training: bool,
+        transform_profile: TransformProfile = "baseline",
     ) -> None:
         self._records = list(records)
         self._transform = build_image_transform(
-            image_size=image_size, training=training
+            image_size=image_size,
+            training=training,
+            transform_profile=transform_profile,
         )
         self._cache: dict[tuple[str, str], torch.Tensor] = {}
 

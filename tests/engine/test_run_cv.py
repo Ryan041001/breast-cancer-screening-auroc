@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 from types import SimpleNamespace
+
+import pytest
 
 from final_project.config import (
     AppConfig,
@@ -11,6 +14,7 @@ from final_project.config import (
     TrainConfig,
 )
 from final_project.data.manifest import BreastManifestRecord
+from final_project.engine.predict import build_prediction_loader
 from final_project.engine.run_cv import run_cross_validation
 from final_project.engine.run_cv import FoldRunResult, summarize_cv_results
 from final_project.engine.trainer import EvaluationResult
@@ -41,11 +45,82 @@ def test_run_cv_aggregates_fold_metrics_and_oof_predictions() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("transform_profile", "expected_profile"),
+    [(None, "baseline"), ("normaug", "normaug")],
+)
+def test_build_prediction_loader_forwards_transform_profile(
+    tmp_path: Path,
+    monkeypatch,
+    transform_profile: Literal["normaug"] | None,
+    expected_profile: str,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class CapturingDataset:
+        def __init__(
+            self,
+            *,
+            records,
+            image_size,
+            training,
+            transform_profile,
+        ) -> None:
+            observed.update(
+                {
+                    "records": list(records),
+                    "image_size": image_size,
+                    "training": training,
+                    "transform_profile": transform_profile,
+                }
+            )
+
+        def __len__(self) -> int:
+            return 0
+
+        def __getitem__(self, index: int) -> object:
+            raise IndexError(index)
+
+    monkeypatch.setattr(
+        "final_project.engine.predict.PairedBreastDataset", CapturingDataset
+    )
+
+    records = [
+        BreastManifestRecord(
+            breast_id="T_001",
+            cc_path=tmp_path / "T_001_CC.jpg",
+            mlo_path=tmp_path / "T_001_MLO.jpg",
+            label=None,
+        )
+    ]
+    if transform_profile is None:
+        build_prediction_loader(
+            records,
+            image_size=32,
+            batch_size=2,
+            num_workers=0,
+        )
+    else:
+        build_prediction_loader(
+            records,
+            image_size=32,
+            batch_size=2,
+            num_workers=0,
+            transform_profile=transform_profile,
+        )
+
+    assert observed["records"] == records
+    assert observed["image_size"] == 32
+    assert observed["training"] is False
+    assert observed["transform_profile"] == expected_profile
+
+
 def test_run_cv_reports_startup_and_fold_progress(
     tmp_path: Path,
     monkeypatch,
     capsys,
 ) -> None:
+    loaded_warmup: dict[str, object] = {}
     train_records = [
         BreastManifestRecord(
             breast_id="100_L",
@@ -85,6 +160,8 @@ def test_run_cv_reports_startup_and_fold_progress(
             image_size=16,
             epochs=1,
             num_workers=0,
+            transform_profile="normaug",
+            external_warmup_epochs=1,
         ),
     )
 
@@ -105,9 +182,19 @@ def test_run_cv_reports_startup_and_fold_progress(
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.PairedBreastModel",
-        lambda backbone_name, pretrained: SimpleNamespace(
+        lambda backbone_name, pretrained, fusion_head_config=None: SimpleNamespace(
             backbone_name=backbone_name,
             pretrained=pretrained,
+        ),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.maybe_prepare_external_warmup",
+        lambda *args, **kwargs: Path("warmup/checkpoints/best.pt"),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.load_backbone_from_warmup",
+        lambda model, checkpoint_path: loaded_warmup.update(
+            {"model": model, "checkpoint_path": checkpoint_path}
         ),
     )
 
@@ -123,7 +210,9 @@ def test_run_cv_reports_startup_and_fold_progress(
         device,
         output_dir,
         learning_rate=1e-3,
+        transform_profile,
     ):
+        assert transform_profile == "normaug"
         fold = int(output_dir.name.rsplit("_", maxsplit=1)[-1])
         return SimpleNamespace(model=f"model-{fold}"), EvaluationResult(
             loss=0.1,
@@ -134,11 +223,15 @@ def test_run_cv_reports_startup_and_fold_progress(
     monkeypatch.setattr("final_project.engine.run_cv.fit_model", fake_fit_model)
     monkeypatch.setattr(
         "final_project.engine.run_cv.build_prediction_loader",
-        lambda records, image_size, batch_size, num_workers: [records],
+        lambda records, image_size, batch_size, num_workers, *, transform_profile: [
+            (records, transform_profile)
+        ],
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.predict_probabilities",
-        lambda model, batches, device: {"T_001": 0.4 if model == "model-0" else 0.6},
+        lambda model, batches, device: {
+            "T_001": 0.4 if model == "model-0" and batches[0][1] == "normaug" else 0.6
+        },
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.write_prediction_table",
@@ -159,3 +252,9 @@ def test_run_cv_reports_startup_and_fold_progress(
     assert "run-cv: fold 1/2 done auc=0.700000" in command_output
     assert "run-cv: fold 2/2 done auc=0.800000" in command_output
     assert artifacts.summary.mean_auc == 0.75
+    assert str(loaded_warmup["checkpoint_path"]).endswith("best.pt")
+    log_text = (tmp_path / "outputs" / "runs" / "progress-test" / "cv" / "run.log").read_text(
+        encoding="utf-8"
+    )
+    assert "run-cv: manifests ready" in log_text
+    assert "run-cv: complete mean_auc=0.750000" in log_text

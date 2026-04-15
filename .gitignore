@@ -39,11 +39,15 @@ test_img/
 outputs/
 models/
 checkpoints/
+MammoNet32k_new/
 
 # Temporary directories and Agent folders
 .claude/
 .omc/
+.worktrees/
 .tmp_research/
+*omo*/
+*omc*
 
 # IDE / OS
 .idea/

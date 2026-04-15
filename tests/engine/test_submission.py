@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from final_project.engine.submission import write_submission
+from final_project.engine.submission import (
+    read_prediction_table_strict,
+    write_submission,
+)
 
 
 def _write_template(path: Path, rows: list[dict[str, str]]) -> None:
@@ -37,3 +40,22 @@ def test_submission_writer_preserves_template_order(tmp_path: Path) -> None:
         {"breast_id": "020_R", "pred_score": "0.75"},
         {"breast_id": "010_L", "pred_score": "0.25"},
     ]
+
+
+def test_strict_prediction_table_reader_rejects_duplicate_ids(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    csv_path = tmp_path / "dup.csv"
+    _write_template(
+        csv_path,
+        rows=[
+            {"breast_id": "001_L", "pred_score": "0.5"},
+            {"breast_id": "001_L", "pred_score": "0.6"},
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Duplicate breast_id"):
+        read_prediction_table_strict(csv_path)
+

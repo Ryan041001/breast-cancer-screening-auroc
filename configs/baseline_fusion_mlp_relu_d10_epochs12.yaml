@@ -1,5 +1,5 @@
 experiment:
-  name: baseline
+  name: baseline_fusion_mlp_relu_d10_epochs12
 
 paths:
   project_root: ..
@@ -8,7 +8,6 @@ paths:
   test_images: test_img
   submission_template: name_sid_submission.csv
   output_root: outputs
-  external_data_root: null
 
 runtime:
   seed: 42
@@ -18,16 +17,10 @@ train:
   folds: 5
   batch_size: 16
   image_size: 384
-  epochs: 10
+  epochs: 12
   num_workers: 0
   transform_profile: baseline
-  fusion_head_variant: linear
+  fusion_head_variant: mlp
   fusion_hidden_dim: 512
-  fusion_dropout: 0.0
-  fusion_activation: gelu
-  fusion_layer_norm: false
-  fusion_residual: false
-  external_warmup_epochs: 0
-  external_warmup_batch_size: 32
-  external_warmup_num_workers: 0
-  external_warmup_learning_rate: 0.001
+  fusion_dropout: 0.1
+  fusion_activation: relu

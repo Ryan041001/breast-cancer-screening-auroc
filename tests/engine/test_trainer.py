@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import torch
 import pytest
@@ -8,8 +9,12 @@ from PIL import Image
 from torch import nn
 
 from final_project.data.manifest import BreastManifestRecord
-from final_project.engine.trainer import Trainer
-from final_project.engine.trainer import fit_model
+from final_project.engine.trainer import EvaluationResult, Trainer
+from final_project.engine.trainer import (
+    build_training_loader,
+    fit_full_model,
+    fit_model,
+)
 from final_project.model.fusion import PairedBreastModel
 
 
@@ -43,6 +48,17 @@ def _write_image(path: Path, value: int) -> None:
     Image.new("L", (16, 16), color=value).save(path)
 
 
+def _make_record(
+    tmp_path: Path, breast_id: str, label: int | None
+) -> BreastManifestRecord:
+    return BreastManifestRecord(
+        breast_id=breast_id,
+        cc_path=tmp_path / f"{breast_id}_CC.jpg",
+        mlo_path=tmp_path / f"{breast_id}_MLO.jpg",
+        label=label,
+    )
+
+
 class TinyPairedModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -50,6 +66,204 @@ class TinyPairedModel(nn.Module):
 
     def forward(self, cc_image: torch.Tensor, mlo_image: torch.Tensor) -> torch.Tensor:
         return cc_image.mean(dim=(1, 2, 3)) + mlo_image.mean(dim=(1, 2, 3)) + self.bias
+
+
+@pytest.mark.parametrize(
+    ("transform_profile", "expected_profile"),
+    [(None, "baseline"), ("normaug", "normaug")],
+)
+def test_build_training_loader_forwards_transform_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transform_profile: Literal["normaug"] | None,
+    expected_profile: str,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class CapturingDataset:
+        def __init__(
+            self,
+            *,
+            records,
+            image_size,
+            training,
+            transform_profile,
+        ) -> None:
+            observed.update(
+                {
+                    "records": list(records),
+                    "image_size": image_size,
+                    "training": training,
+                    "transform_profile": transform_profile,
+                }
+            )
+
+        def __len__(self) -> int:
+            return 1
+
+        def __getitem__(self, index: int) -> object:
+            return {
+                "breast_id": "100_L",
+                "cc_image": torch.zeros(1, 1, 1),
+                "mlo_image": torch.zeros(1, 1, 1),
+                "label": torch.tensor(0.0),
+            }
+
+    monkeypatch.setattr(
+        "final_project.engine.trainer.PairedBreastDataset", CapturingDataset
+    )
+
+    records = [_make_record(tmp_path, "100_L", 0)]
+    if transform_profile is None:
+        build_training_loader(
+            records,
+            image_size=32,
+            batch_size=2,
+            num_workers=0,
+            training=True,
+        )
+    else:
+        build_training_loader(
+            records,
+            image_size=32,
+            batch_size=2,
+            num_workers=0,
+            training=True,
+            transform_profile=transform_profile,
+        )
+
+    assert observed["records"] == records
+    assert observed["image_size"] == 32
+    assert observed["training"] is True
+    assert observed["transform_profile"] == expected_profile
+
+
+def test_fit_model_passes_transform_profile_to_train_and_val_loaders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader_calls: list[tuple[bool, str, bool]] = []
+
+    def fake_build_training_loader(
+        records,
+        image_size,
+        batch_size,
+        num_workers,
+        training,
+        *,
+        transform_profile,
+        use_cuda=False,
+    ):
+        loader_calls.append((training, transform_profile, use_cuda))
+        return object()
+
+    monkeypatch.setattr(
+        "final_project.engine.trainer.build_training_loader",
+        fake_build_training_loader,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer.build_binary_loss",
+        lambda pos_weight: nn.BCEWithLogitsLoss(),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer._compute_positive_class_weight",
+        lambda records: None,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer._train_one_epoch",
+        lambda model,
+        loader,
+        optimizer,
+        criterion,
+        device,
+        *,
+        use_cuda=False,
+        scaler=None: 0.2,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer.evaluate_model",
+        lambda model, loader, criterion, device, *, use_cuda=False: EvaluationResult(
+            loss=0.1,
+            auc=0.9,
+            predictions={"200_L": 0.9},
+        ),
+    )
+
+    trainer, evaluation = fit_model(
+        TinyPairedModel(),
+        [_make_record(tmp_path, "100_L", 0), _make_record(tmp_path, "101_R", 1)],
+        [_make_record(tmp_path, "200_L", 1)],
+        image_size=16,
+        batch_size=2,
+        num_workers=0,
+        epochs=1,
+        device="cpu",
+        output_dir=tmp_path / "fit_with_profile",
+        transform_profile="normaug",
+    )
+
+    assert loader_calls == [(True, "normaug", False), (False, "normaug", False)]
+    assert (trainer.checkpoints_dir / "best.pt").exists()
+    assert evaluation.predictions == {"200_L": 0.9}
+
+
+def test_fit_full_model_passes_transform_profile_to_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader_calls: list[tuple[bool, str, bool]] = []
+
+    def fake_build_training_loader(
+        records,
+        image_size,
+        batch_size,
+        num_workers,
+        training,
+        *,
+        transform_profile,
+        use_cuda=False,
+    ):
+        loader_calls.append((training, transform_profile, use_cuda))
+        return object()
+
+    monkeypatch.setattr(
+        "final_project.engine.trainer.build_training_loader",
+        fake_build_training_loader,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer.build_binary_loss",
+        lambda pos_weight: nn.BCEWithLogitsLoss(),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer._compute_positive_class_weight",
+        lambda records: None,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.trainer._train_one_epoch",
+        lambda model,
+        loader,
+        optimizer,
+        criterion,
+        device,
+        *,
+        use_cuda=False,
+        scaler=None: 0.2,
+    )
+
+    trainer = fit_full_model(
+        TinyPairedModel(),
+        [_make_record(tmp_path, "100_L", 0), _make_record(tmp_path, "101_R", 1)],
+        image_size=16,
+        batch_size=2,
+        num_workers=0,
+        epochs=1,
+        device="cpu",
+        output_dir=tmp_path / "full_fit_with_profile",
+        transform_profile="normaug",
+    )
+
+    assert loader_calls == [(True, "normaug", False)]
+    assert (trainer.checkpoints_dir / "best.pt").exists()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -136,4 +350,8 @@ def test_fit_model_reports_epoch_progress(
     assert "train: epoch 2/2 done" in command_output
     assert "val_auc=" in command_output
     assert (trainer.checkpoints_dir / "best.pt").exists()
+    log_text = (tmp_path / "cpu_fit" / "run.log").read_text(encoding="utf-8")
+    assert "train: setup" in log_text
+    assert "train: epoch 1/2 start" in log_text
+    assert "train: complete" in log_text
     assert len(evaluation.predictions) == 2

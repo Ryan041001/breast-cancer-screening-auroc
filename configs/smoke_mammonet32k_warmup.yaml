@@ -1,5 +1,5 @@
 experiment:
-  name: baseline
+  name: smoke_mammonet32k_warmup
 
 paths:
   project_root: ..
@@ -8,17 +8,17 @@ paths:
   test_images: test_img
   submission_template: name_sid_submission.csv
   output_root: outputs
-  external_data_root: null
+  external_data_root: MammoNet32k_new/MammoNet32k_new
 
 runtime:
-  seed: 42
+  seed: 7
   device: cuda
 
 train:
-  folds: 5
-  batch_size: 16
+  folds: 2
+  batch_size: 2
   image_size: 384
-  epochs: 10
+  epochs: 1
   num_workers: 0
   transform_profile: baseline
   fusion_head_variant: linear
@@ -27,7 +27,8 @@ train:
   fusion_activation: gelu
   fusion_layer_norm: false
   fusion_residual: false
-  external_warmup_epochs: 0
-  external_warmup_batch_size: 32
+  external_warmup_epochs: 1
+  external_warmup_batch_size: 8
   external_warmup_num_workers: 0
   external_warmup_learning_rate: 0.001
+  external_warmup_max_samples: 128
