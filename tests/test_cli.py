@@ -35,6 +35,13 @@ def _make_config(*, transform_profile: str = "baseline") -> SimpleNamespace:
             num_workers=0,
             epochs=1,
             transform_profile=transform_profile,
+            cache_mode="preprocess",
+            learning_rate=1e-3,
+            weight_decay=1e-2,
+            scheduler="none",
+            min_lr=0.0,
+            freeze_backbone_epochs=0,
+            grad_accum_steps=1,
             external_warmup_epochs=0,
         ),
         runtime=SimpleNamespace(seed=7, device="cpu"),
@@ -104,6 +111,7 @@ def test_train_dry_run_loader_passes_transform_profile_to_dataset(
             image_size: int,
             training: bool,
             transform_profile: str = "baseline",
+            cache_mode: str = "preprocess",
         ) -> None:
             captured["transform_profile"] = transform_profile
 
@@ -155,6 +163,13 @@ def test_train_full_run_passes_transform_profile_to_fit_full_model(
         device: str,
         output_dir: Path,
         transform_profile: str = "baseline",
+        learning_rate: float = 1e-3,
+        weight_decay: float = 1e-2,
+        scheduler_name: str = "none",
+        min_lr: float = 0.0,
+        freeze_backbone_epochs: int = 0,
+        grad_accum_steps: int = 1,
+        cache_mode: str = "preprocess",
     ) -> SimpleNamespace:
         captured["transform_profile"] = transform_profile
         return SimpleNamespace(checkpoints_dir=Path("outputs/checkpoints"))
@@ -328,6 +343,7 @@ def test_predict_passes_transform_profile_to_prediction_loader(
         num_workers: int,
         *,
         transform_profile: str = "baseline",
+        cache_mode: str = "preprocess",
     ) -> object:
         captured_profiles.append(transform_profile)
         return object()

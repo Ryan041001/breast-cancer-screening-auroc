@@ -50,6 +50,11 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.train.transform_profile == "baseline"
     assert config.paths.external_data_root is None
     assert config.train.external_warmup_epochs == 0
+    assert config.train.learning_rate == pytest.approx(1e-3)
+    assert config.train.weight_decay == pytest.approx(1e-2)
+    assert config.train.scheduler == "none"
+    assert config.train.cache_mode == "preprocess"
+    assert config.train.external_sampler == "none"
 
 
 def test_load_config_loads_default_linear_fusion_head_values() -> None:
@@ -61,6 +66,8 @@ def test_load_config_loads_default_linear_fusion_head_values() -> None:
     assert config.train.fusion_activation == "gelu"
     assert config.train.fusion_layer_norm is False
     assert config.train.fusion_residual is False
+    assert config.train.freeze_backbone_epochs == 0
+    assert config.train.grad_accum_steps == 1
     assert config.train.external_warmup_batch_size == 16
     assert config.train.external_warmup_learning_rate == 0.001
 
@@ -194,6 +201,11 @@ def test_load_config_rejects_unknown_fusion_head_variant(tmp_path: Path) -> None
         ("external_warmup_num_workers", -1, "external_warmup_num_workers"),
         ("external_warmup_learning_rate", 0.0, "external_warmup_learning_rate"),
         ("external_warmup_max_samples", 0, "external_warmup_max_samples"),
+        ("learning_rate", 0.0, "learning_rate"),
+        ("weight_decay", -0.1, "weight_decay"),
+        ("min_lr", -0.1, "min_lr"),
+        ("freeze_backbone_epochs", -1, "freeze_backbone_epochs"),
+        ("grad_accum_steps", 0, "grad_accum_steps"),
     ],
 )
 def test_load_config_rejects_invalid_fusion_head_numeric_values(
@@ -214,7 +226,7 @@ def test_load_config_rejects_invalid_fusion_head_numeric_values(
         _ = load_config(bad_config)
 
 
-@pytest.mark.parametrize("transform_profile", ["baseline", "normaug"])
+@pytest.mark.parametrize("transform_profile", ["baseline", "normaug", "normonly"])
 def test_load_config_accepts_supported_transform_profiles(
     tmp_path: Path,
     transform_profile: str,
@@ -277,6 +289,32 @@ def test_load_config_rejects_unknown_transform_profile(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="transform_profile"):
         _ = load_config(bad_config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scheduler", "cosine"),
+        ("cache_mode", "preprocess"),
+        ("external_sampler", "dataset_label_balanced"),
+    ],
+)
+def test_load_config_accepts_supported_training_controls(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    config_path = tmp_path / f"{field}.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        field: value,
+    }
+    _write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert getattr(config.train, field) == value
 
 
 def test_load_config_rejects_missing_required_sections(tmp_path: Path) -> None:

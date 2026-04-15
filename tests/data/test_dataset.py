@@ -94,6 +94,28 @@ def test_build_image_transform_normaug_adds_normalize_and_train_flip() -> None:
     assert tuple(normalize.std) == (0.229, 0.224, 0.225)
 
 
+def test_build_image_transform_normonly_adds_normalize_without_flip() -> None:
+    eval_transform = build_image_transform(
+        image_size=16,
+        training=False,
+        transform_profile="normonly",
+    )
+    train_transform = build_image_transform(
+        image_size=16,
+        training=True,
+        transform_profile="normonly",
+    )
+
+    assert _step_names(eval_transform) == ["Resize", "ToTensor", "Normalize"]
+    assert _step_names(train_transform) == [
+        "Resize",
+        "RandomHorizontalFlip",
+        "ToTensor",
+        "Normalize",
+    ]
+    assert cast(Any, _steps(train_transform)[1]).p == 0.0
+
+
 def test_paired_breast_dataset_returns_cc_and_mlo_in_fixed_order(
     tmp_path: Path,
 ) -> None:
@@ -163,3 +185,42 @@ def test_paired_breast_dataset_normaug_normalizes_views(tmp_path: Path) -> None:
         assert abs(float(sample["cc_image"][channel, 0, 0]) - expected) < 1e-6
     for channel, expected in enumerate(expected_mlo):
         assert abs(float(sample["mlo_image"][channel, 0, 0]) - expected) < 1e-6
+
+
+def test_paired_breast_dataset_preprocess_cache_preserves_random_augment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cc_path = tmp_path / "train_img/100_L/100_L_CC.jpg"
+    mlo_path = tmp_path / "train_img/100_L/100_L_MLO.jpg"
+    _write_uniform_grayscale_image(cc_path, value=24)
+    _write_uniform_grayscale_image(mlo_path, value=196)
+
+    dataset = PairedBreastDataset(
+        records=[
+            BreastManifestRecord(
+                breast_id="100_L",
+                cc_path=cc_path,
+                mlo_path=mlo_path,
+                label=1,
+            )
+        ],
+        image_size=12,
+        training=True,
+        transform_profile="normaug",
+        cache_mode="preprocess",
+    )
+
+    calls = {"count": 0}
+
+    def fake_transform(image):
+        calls["count"] += 1
+        return torch.full((3, 12, 12), float(calls["count"]))
+
+    monkeypatch.setattr(dataset, "_transform", fake_transform)
+
+    first = dataset[0]
+    second = dataset[0]
+
+    assert float(first["cc_image"][0, 0, 0]) == 1.0
+    assert float(second["cc_image"][0, 0, 0]) == 3.0

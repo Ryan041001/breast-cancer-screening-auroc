@@ -3,12 +3,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+import sys
 from typing import TypedDict, cast
 
 import torch
 from torch import nn
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from ..data.dataset import PairedBreastDataset, PairedBreastSample
 from ..data.manifest import BreastManifestRecord
@@ -97,6 +100,7 @@ def build_training_loader(
     training: bool,
     *,
     transform_profile: TransformProfile = "baseline",
+    cache_mode: str = "preprocess",
     use_cuda: bool = False,
 ) -> DataLoader[TrainingBatch]:
     dataset = PairedBreastDataset(
@@ -104,6 +108,7 @@ def build_training_loader(
         image_size=image_size,
         training=training,
         transform_profile=transform_profile,
+        cache_mode=cache_mode,
     )
     if num_workers > 0:
         return cast(
@@ -145,9 +150,19 @@ def fit_model(
     output_dir: Path,
     transform_profile: TransformProfile = "baseline",
     learning_rate: float = 1e-3,
+    weight_decay: float = 1e-2,
+    scheduler_name: str = "none",
+    min_lr: float = 0.0,
+    freeze_backbone_epochs: int = 0,
+    grad_accum_steps: int = 1,
+    cache_mode: str = "preprocess",
 ) -> tuple[Trainer, EvaluationResult]:
     use_cuda = str(device) in ("cuda",) or str(device).startswith("cuda:")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
     trainer = Trainer(model=model, optimizer=optimizer, output_dir=output_dir)
     log_message(
         output_dir,
@@ -157,7 +172,13 @@ def fit_model(
         f" batch_size={batch_size}"
         f" epochs={epochs}"
         f" device={device}"
-        f" transform_profile={transform_profile}",
+        f" transform_profile={transform_profile}"
+        f" learning_rate={learning_rate}"
+        f" weight_decay={weight_decay}"
+        f" scheduler={scheduler_name}"
+        f" freeze_backbone_epochs={freeze_backbone_epochs}"
+        f" grad_accum_steps={grad_accum_steps}"
+        f" cache_mode={cache_mode}",
     )
     criterion = build_binary_loss(
         pos_weight=_compute_positive_class_weight(train_records)
@@ -169,6 +190,7 @@ def fit_model(
         num_workers=num_workers,
         training=True,
         transform_profile=transform_profile,
+        cache_mode=cache_mode,
         use_cuda=use_cuda,
     )
     val_loader = build_training_loader(
@@ -178,15 +200,32 @@ def fit_model(
         num_workers=num_workers,
         training=False,
         transform_profile=transform_profile,
+        cache_mode=cache_mode,
         use_cuda=use_cuda,
     )
 
     model.to(device)
     if use_cuda:
         torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+        torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.set_float32_matmul_precision("high")
+        model.to(memory_format=torch.channels_last)
+    scheduler = _build_scheduler(
+        optimizer,
+        scheduler_name=scheduler_name,
+        epochs=epochs,
+        min_lr=min_lr,
+    )
     scaler = torch.amp.GradScaler(enabled=use_cuda)
     best_eval = EvaluationResult(loss=float("inf"), auc=float("-inf"), predictions={})
     for epoch in range(epochs):
+        _apply_backbone_freeze(
+            model,
+            freeze_backbone_epochs=freeze_backbone_epochs,
+            epoch=epoch,
+            output_dir=output_dir,
+        )
         log_message(output_dir, f"train: epoch {epoch + 1}/{epochs} start")
         train_loss = _train_one_epoch(
             model,
@@ -196,6 +235,7 @@ def fit_model(
             device,
             use_cuda=use_cuda,
             scaler=scaler,
+            grad_accum_steps=grad_accum_steps,
         )
         eval_result = evaluate_model(
             model,
@@ -221,6 +261,12 @@ def fit_model(
             )
         if eval_result.auc >= best_eval.auc:
             best_eval = eval_result
+        if scheduler is not None:
+            scheduler.step()
+            log_message(
+                output_dir,
+                f"train: scheduler step lr={optimizer.param_groups[0]['lr']:.8f}",
+            )
 
     trainer.load_checkpoint(trainer.checkpoints_dir / "best.pt")
     log_message(
@@ -242,9 +288,19 @@ def fit_full_model(
     output_dir: Path,
     transform_profile: TransformProfile = "baseline",
     learning_rate: float = 1e-3,
+    weight_decay: float = 1e-2,
+    scheduler_name: str = "none",
+    min_lr: float = 0.0,
+    freeze_backbone_epochs: int = 0,
+    grad_accum_steps: int = 1,
+    cache_mode: str = "preprocess",
 ) -> Trainer:
     use_cuda = str(device) in ("cuda",) or str(device).startswith("cuda:")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
     trainer = Trainer(model=model, optimizer=optimizer, output_dir=output_dir)
     log_message(
         output_dir,
@@ -253,7 +309,13 @@ def fit_full_model(
         f" batch_size={batch_size}"
         f" epochs={epochs}"
         f" device={device}"
-        f" transform_profile={transform_profile}",
+        f" transform_profile={transform_profile}"
+        f" learning_rate={learning_rate}"
+        f" weight_decay={weight_decay}"
+        f" scheduler={scheduler_name}"
+        f" freeze_backbone_epochs={freeze_backbone_epochs}"
+        f" grad_accum_steps={grad_accum_steps}"
+        f" cache_mode={cache_mode}",
     )
     criterion = build_binary_loss(
         pos_weight=_compute_positive_class_weight(train_records)
@@ -265,14 +327,31 @@ def fit_full_model(
         num_workers=num_workers,
         training=True,
         transform_profile=transform_profile,
+        cache_mode=cache_mode,
         use_cuda=use_cuda,
     )
 
     model.to(device)
     if use_cuda:
         torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+        torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.set_float32_matmul_precision("high")
+        model.to(memory_format=torch.channels_last)
+    scheduler = _build_scheduler(
+        optimizer,
+        scheduler_name=scheduler_name,
+        epochs=epochs,
+        min_lr=min_lr,
+    )
     scaler = torch.amp.GradScaler(enabled=use_cuda)
     for epoch in range(epochs):
+        _apply_backbone_freeze(
+            model,
+            freeze_backbone_epochs=freeze_backbone_epochs,
+            epoch=epoch,
+            output_dir=output_dir,
+        )
         log_message(output_dir, f"train: epoch {epoch + 1}/{epochs} start")
         loss = _train_one_epoch(
             model,
@@ -282,6 +361,7 @@ def fit_full_model(
             device,
             use_cuda=use_cuda,
             scaler=scaler,
+            grad_accum_steps=grad_accum_steps,
         )
         log_message(
             output_dir,
@@ -292,6 +372,12 @@ def fit_full_model(
             log_message(
                 output_dir,
                 f"train: checkpoint updated path={checkpoint_path} metric={-loss:.6f}",
+            )
+        if scheduler is not None:
+            scheduler.step()
+            log_message(
+                output_dir,
+                f"train: scheduler step lr={optimizer.param_groups[0]['lr']:.8f}",
             )
 
     trainer.load_checkpoint(trainer.checkpoints_dir / "best.pt")
@@ -325,11 +411,26 @@ def evaluate_model(
             enabled=use_cuda,
         ),
     ):
-        for batch in loader:
+        progress = tqdm(
+            loader,
+            desc="eval",
+            leave=False,
+            dynamic_ncols=True,
+            disable=not sys.stderr.isatty(),
+        )
+        for batch in progress:
             labels = batch["label"].to(device, non_blocking=use_cuda)
             logits = model(
-                batch["cc_image"].to(device, non_blocking=use_cuda),
-                batch["mlo_image"].to(device, non_blocking=use_cuda),
+                batch["cc_image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                ),
+                batch["mlo_image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                ),
             )
             loss = criterion(logits, labels)
             probs = torch.sigmoid(logits.float()).detach().cpu().tolist()
@@ -340,6 +441,7 @@ def evaluate_model(
             predictions.update(
                 dict(zip(batch["breast_id"], scores[-len(probs) :], strict=True))
             )
+            progress.set_postfix(loss=f"{float(loss.float().detach()):.4f}")
 
     average_loss = total_loss / total_items if total_items else 0.0
     auc = binary_auroc(targets, scores) if len(set(targets)) > 1 else 0.5
@@ -355,31 +457,87 @@ def _train_one_epoch(
     *,
     use_cuda: bool = False,
     scaler: torch.amp.GradScaler | None = None,
+    grad_accum_steps: int = 1,
 ) -> float:
     if scaler is None:
         scaler = torch.amp.GradScaler(enabled=False)
     model.train()
     total_loss = 0.0
     total_items = 0
-    for batch in loader:
+    progress = tqdm(
+        loader,
+        desc="train",
+        leave=False,
+        dynamic_ncols=True,
+        disable=not sys.stderr.isatty(),
+    )
+    optimizer.zero_grad(set_to_none=True)
+    for batch_index, batch in enumerate(progress, start=1):
         labels = batch["label"].to(device, non_blocking=use_cuda)
-        optimizer.zero_grad()
         with torch.autocast(
             device_type="cuda",
             dtype=torch.float16,
             enabled=use_cuda,
         ):
             logits = model(
-                batch["cc_image"].to(device, non_blocking=use_cuda),
-                batch["mlo_image"].to(device, non_blocking=use_cuda),
+                batch["cc_image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                ),
+                batch["mlo_image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                ),
             )
             loss = criterion(logits, labels)
-        scaler.scale(loss).backward()  # type: ignore[arg-type]
-        scaler.step(optimizer)
-        scaler.update()
+            scaled_loss = loss / grad_accum_steps
+        scaler.scale(scaled_loss).backward()  # type: ignore[arg-type]
+        should_step = (
+            batch_index % grad_accum_steps == 0 or batch_index == len(loader)
+        )
+        if should_step:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
         total_loss += float(loss.float().detach()) * int(labels.numel())
         total_items += int(labels.numel())
+        progress.set_postfix(loss=f"{float(loss.float().detach()):.4f}")
     return total_loss / total_items if total_items else 0.0
+
+
+def _build_scheduler(
+    optimizer: Optimizer,
+    *,
+    scheduler_name: str,
+    epochs: int,
+    min_lr: float,
+) -> LRScheduler | None:
+    if scheduler_name == "cosine":
+        return CosineAnnealingLR(optimizer, T_max=max(1, epochs), eta_min=min_lr)
+    return None
+
+
+def _apply_backbone_freeze(
+    model: nn.Module,
+    *,
+    freeze_backbone_epochs: int,
+    epoch: int,
+    output_dir: Path,
+) -> None:
+    backbone = getattr(model, "backbone", None)
+    if backbone is None or freeze_backbone_epochs <= 0:
+        return
+    should_freeze = epoch < freeze_backbone_epochs
+    current_state = getattr(model, "_backbone_frozen", None)
+    if current_state == should_freeze:
+        return
+    for parameter in backbone.parameters():
+        parameter.requires_grad = not should_freeze
+    setattr(model, "_backbone_frozen", should_freeze)
+    state = "frozen" if should_freeze else "unfrozen"
+    log_message(output_dir, f"train: backbone {state} epoch={epoch + 1}")
 
 
 def _collate_training_samples(

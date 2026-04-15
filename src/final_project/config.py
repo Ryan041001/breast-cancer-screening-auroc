@@ -20,9 +20,12 @@ REQUIRED_PATH_KEYS = (
 )
 REQUIRED_RUNTIME_KEYS = ("seed", "device")
 REQUIRED_TRAIN_KEYS = ("folds", "batch_size", "image_size", "epochs", "num_workers")
-ALLOWED_TRANSFORM_PROFILES = ("baseline", "normaug")
+ALLOWED_TRANSFORM_PROFILES = ("baseline", "normaug", "normonly")
 ALLOWED_FUSION_HEAD_VARIANTS = ("linear", "mlp")
 ALLOWED_FUSION_ACTIVATIONS = ("gelu", "relu")
+ALLOWED_SCHEDULERS = ("none", "cosine")
+ALLOWED_CACHE_MODES = ("none", "preprocess")
+ALLOWED_EXTERNAL_SAMPLERS = ("none", "dataset_label_balanced")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,11 +66,19 @@ class TrainConfig:
     fusion_activation: str = "gelu"
     fusion_layer_norm: bool = False
     fusion_residual: bool = False
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-2
+    scheduler: str = "none"
+    min_lr: float = 0.0
+    freeze_backbone_epochs: int = 0
+    grad_accum_steps: int = 1
+    cache_mode: str = "preprocess"
     external_warmup_epochs: int = 0
     external_warmup_batch_size: int = 32
     external_warmup_num_workers: int = 0
     external_warmup_learning_rate: float = 1e-3
     external_warmup_max_samples: int | None = None
+    external_sampler: str = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +244,58 @@ def load_config(config_path: str | Path) -> AppConfig:
 
     fusion_layer_norm = bool(train_payload.get("fusion_layer_norm", False))
     fusion_residual = bool(train_payload.get("fusion_residual", False))
+    scheduler = str(train_payload.get("scheduler", "none"))
+    if scheduler not in ALLOWED_SCHEDULERS:
+        allowed = ", ".join(ALLOWED_SCHEDULERS)
+        raise ValueError(f"Config key 'scheduler' must be one of: {allowed}")
+
+    cache_mode = str(train_payload.get("cache_mode", "preprocess"))
+    if cache_mode not in ALLOWED_CACHE_MODES:
+        allowed = ", ".join(ALLOWED_CACHE_MODES)
+        raise ValueError(f"Config key 'cache_mode' must be one of: {allowed}")
+
+    external_sampler = str(train_payload.get("external_sampler", "none"))
+    if external_sampler not in ALLOWED_EXTERNAL_SAMPLERS:
+        allowed = ", ".join(ALLOWED_EXTERNAL_SAMPLERS)
+        raise ValueError(f"Config key 'external_sampler' must be one of: {allowed}")
+
+    learning_rate_raw = train_payload.get("learning_rate", 1e-3)
+    if isinstance(learning_rate_raw, bool) or not isinstance(
+        learning_rate_raw, (int, float)
+    ):
+        raise ValueError("Config key 'learning_rate' must be a number")
+    learning_rate = float(learning_rate_raw)
+    if learning_rate <= 0.0:
+        raise ValueError("Config key 'learning_rate' must be greater than 0.0")
+
+    weight_decay_raw = train_payload.get("weight_decay", 1e-2)
+    if isinstance(weight_decay_raw, bool) or not isinstance(
+        weight_decay_raw, (int, float)
+    ):
+        raise ValueError("Config key 'weight_decay' must be a number")
+    weight_decay = float(weight_decay_raw)
+    if weight_decay < 0.0:
+        raise ValueError("Config key 'weight_decay' must be at least 0.0")
+
+    min_lr_raw = train_payload.get("min_lr", 0.0)
+    if isinstance(min_lr_raw, bool) or not isinstance(min_lr_raw, (int, float)):
+        raise ValueError("Config key 'min_lr' must be a number")
+    min_lr = float(min_lr_raw)
+    if min_lr < 0.0:
+        raise ValueError("Config key 'min_lr' must be at least 0.0")
+    if scheduler == "cosine" and min_lr > learning_rate:
+        raise ValueError("Config key 'min_lr' must be less than or equal to learning_rate")
+
+    freeze_backbone_epochs = _require_int_at_least(
+        {"freeze_backbone_epochs": train_payload.get("freeze_backbone_epochs", 0)},
+        "freeze_backbone_epochs",
+        0,
+    )
+    grad_accum_steps = _require_int_at_least(
+        {"grad_accum_steps": train_payload.get("grad_accum_steps", 1)},
+        "grad_accum_steps",
+        1,
+    )
 
     external_warmup_epochs = _require_int_at_least(
         {"external_warmup_epochs": train_payload.get("external_warmup_epochs", 0)},
@@ -354,10 +417,18 @@ def load_config(config_path: str | Path) -> AppConfig:
             fusion_activation=fusion_activation,
             fusion_layer_norm=fusion_layer_norm,
             fusion_residual=fusion_residual,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            scheduler=scheduler,
+            min_lr=min_lr,
+            freeze_backbone_epochs=freeze_backbone_epochs,
+            grad_accum_steps=grad_accum_steps,
+            cache_mode=cache_mode,
             external_warmup_epochs=external_warmup_epochs,
             external_warmup_batch_size=external_warmup_batch_size,
             external_warmup_num_workers=external_warmup_num_workers,
             external_warmup_learning_rate=external_warmup_learning_rate,
             external_warmup_max_samples=external_warmup_max_samples,
+            external_sampler=external_sampler,
         ),
     )

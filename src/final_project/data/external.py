@@ -124,7 +124,12 @@ class ExternalImageDataset(Dataset[ExternalImageSample]):
 
     def __getitem__(self, index: int) -> ExternalImageSample:
         record = self._records[index]
-        pseudo_breast_id = "external_R" if record.laterality == "R" else "external_L"
+        if record.laterality == "R":
+            pseudo_breast_id = "external_R"
+        elif record.laterality == "L":
+            pseudo_breast_id = "external_L"
+        else:
+            pseudo_breast_id = "external_U"
         with Image.open(record.image_path) as image:
             processed = preprocess_view_image(image, breast_id=pseudo_breast_id)
         return {

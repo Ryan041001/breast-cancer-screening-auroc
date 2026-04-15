@@ -13,6 +13,9 @@ from final_project.data.preprocess import preprocess_view_image
 from final_project.data.transforms import TransformProfile, build_image_transform
 
 
+CacheMode = str
+
+
 class PairedBreastSample(TypedDict):
     breast_id: str
     cc_image: torch.Tensor
@@ -27,6 +30,7 @@ class PairedBreastDataset(Dataset[PairedBreastSample]):
         image_size: int,
         training: bool,
         transform_profile: TransformProfile = "baseline",
+        cache_mode: CacheMode = "preprocess",
     ) -> None:
         self._records = list(records)
         self._transform = build_image_transform(
@@ -34,7 +38,8 @@ class PairedBreastDataset(Dataset[PairedBreastSample]):
             training=training,
             transform_profile=transform_profile,
         )
-        self._cache: dict[tuple[str, str], torch.Tensor] = {}
+        self._cache_mode = cache_mode
+        self._cache: dict[tuple[str, str], Image.Image] = {}
 
     def __getstate__(self) -> dict[str, object]:
         state = self.__dict__.copy()
@@ -63,11 +68,10 @@ class PairedBreastDataset(Dataset[PairedBreastSample]):
 
     def _load_view(self, path: Path, breast_id: str) -> torch.Tensor:
         cache_key = (str(path), breast_id)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
-        with Image.open(path) as image:
-            processed = preprocess_view_image(image, breast_id=breast_id)
-        tensor = self._transform(processed)
-        self._cache[cache_key] = tensor
-        return tensor
+        processed = self._cache.get(cache_key)
+        if processed is None:
+            with Image.open(path) as image:
+                processed = preprocess_view_image(image, breast_id=breast_id)
+            if self._cache_mode == "preprocess":
+                self._cache[cache_key] = processed
+        return self._transform(processed.copy() if self._cache_mode == "preprocess" else processed)

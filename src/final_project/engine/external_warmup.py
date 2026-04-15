@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import TypedDict
 
 import torch
 from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from tqdm.auto import tqdm
 
 from ..config import AppConfig
 from ..data.external import (
@@ -92,6 +95,12 @@ def run_external_warmup(
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoints_dir / "best.pt"
     metrics_path = output_dir / "metrics.json"
+    warmup_metadata = build_external_warmup_metadata(
+        config=config,
+        backbone_name=backbone_name,
+        image_size=image_size,
+        transform_profile=transform_profile,
+    )
     log_message(
         output_dir,
         "warmup-external: setup"
@@ -100,7 +109,9 @@ def run_external_warmup(
         f" batch_size={config.train.external_warmup_batch_size}"
         f" epochs={config.train.external_warmup_epochs}"
         f" lr={config.train.external_warmup_learning_rate}"
-        f" device={config.runtime.device}",
+        f" device={config.runtime.device}"
+        f" sampler={config.train.external_sampler}"
+        f" metadata_hash={warmup_metadata['metadata_hash']}",
     )
 
     use_cuda = str(config.runtime.device) in ("cuda",) or str(config.runtime.device).startswith("cuda:")
@@ -111,6 +122,7 @@ def run_external_warmup(
         num_workers=config.train.external_warmup_num_workers,
         training=True,
         transform_profile=transform_profile,
+        sampler_mode=config.train.external_sampler,
         use_cuda=use_cuda,
     )
     val_loader = build_external_loader(
@@ -124,6 +136,12 @@ def run_external_warmup(
     )
     model = ExternalWarmupModel(backbone_name=backbone_name, pretrained=True)
     model.to(config.runtime.device)
+    if use_cuda:
+        torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+        torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
+        torch.set_float32_matmul_precision("high")
+        model.to(memory_format=torch.channels_last)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.train.external_warmup_learning_rate,
@@ -177,6 +195,7 @@ def run_external_warmup(
                     "model_state_dict": model.state_dict(),
                     "metric": evaluation.auc,
                     "epoch": epoch + 1,
+                    "warmup_metadata": warmup_metadata,
                 },
                 checkpoint_path,
             )
@@ -207,8 +226,21 @@ def maybe_prepare_external_warmup(
         return None
     checkpoint_path = output_dir / "checkpoints" / "best.pt"
     if checkpoint_path.exists():
-        log_message(output_dir, f"warmup-external: reusing checkpoint={checkpoint_path}")
-        return checkpoint_path
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        expected_metadata = build_external_warmup_metadata(
+            config=config,
+            backbone_name=backbone_name,
+            image_size=image_size,
+            transform_profile=transform_profile,
+        )
+        saved_metadata = checkpoint.get("warmup_metadata")
+        if isinstance(saved_metadata, dict) and saved_metadata == expected_metadata:
+            log_message(output_dir, f"warmup-external: reusing checkpoint={checkpoint_path}")
+            return checkpoint_path
+        log_message(
+            output_dir,
+            "warmup-external: checkpoint metadata mismatch, rebuilding warmup checkpoint",
+        )
     artifacts = run_external_warmup(
         config,
         backbone_name=backbone_name,
@@ -238,6 +270,7 @@ def build_external_loader(
     num_workers: int,
     training: bool,
     transform_profile: TransformProfile,
+    sampler_mode: str = "none",
     use_cuda: bool,
 ) -> DataLoader[ExternalBatch]:
     dataset = ExternalImageDataset(
@@ -246,11 +279,17 @@ def build_external_loader(
         training=training,
         transform_profile=transform_profile,
     )
+    sampler = None
+    shuffle = training
+    if training and sampler_mode == "dataset_label_balanced":
+        sampler = _build_balanced_sampler(records)
+        shuffle = False
     if num_workers > 0:
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=training,
+            shuffle=shuffle,
+            sampler=sampler,
             num_workers=num_workers,
             collate_fn=_collate_external_samples,
             pin_memory=use_cuda,
@@ -260,7 +299,8 @@ def build_external_loader(
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=training,
+        shuffle=shuffle,
+        sampler=sampler,
         num_workers=num_workers,
         collate_fn=_collate_external_samples,
         pin_memory=use_cuda,
@@ -284,15 +324,29 @@ def evaluate_external_model(
         torch.no_grad(),
         torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_cuda),
     ):
-        for batch in loader:
+        progress = tqdm(
+            loader,
+            desc="warmup-eval",
+            leave=False,
+            dynamic_ncols=True,
+            disable=not sys.stderr.isatty(),
+        )
+        for batch in progress:
             labels = batch["label"].to(device, non_blocking=use_cuda)
-            logits = model(batch["image"].to(device, non_blocking=use_cuda))
+            logits = model(
+                batch["image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                )
+            )
             loss = criterion(logits, labels)
             probs = torch.sigmoid(logits.float()).detach().cpu().tolist()
             total_loss += float(loss.float().detach()) * int(labels.numel())
             total_items += int(labels.numel())
             targets.extend(int(value) for value in labels.detach().cpu().tolist())
             scores.extend(float(value) for value in probs)
+            progress.set_postfix(loss=f"{float(loss.float().detach()):.4f}")
     average_loss = total_loss / total_items if total_items else 0.0
     auc = binary_auroc(targets, scores) if len(set(targets)) > 1 else 0.5
     return ExternalWarmupResult(loss=average_loss, auc=auc)
@@ -311,17 +365,31 @@ def _train_one_epoch(
     model.train()
     total_loss = 0.0
     total_items = 0
-    for batch in loader:
+    progress = tqdm(
+        loader,
+        desc="warmup-train",
+        leave=False,
+        dynamic_ncols=True,
+        disable=not sys.stderr.isatty(),
+    )
+    for batch in progress:
         labels = batch["label"].to(device, non_blocking=use_cuda)
         optimizer.zero_grad()
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_cuda):
-            logits = model(batch["image"].to(device, non_blocking=use_cuda))
+            logits = model(
+                batch["image"].to(
+                    device,
+                    non_blocking=use_cuda,
+                    memory_format=torch.channels_last if use_cuda else torch.contiguous_format,
+                )
+            )
             loss = criterion(logits, labels)
         scaler.scale(loss).backward()  # type: ignore[arg-type]
         scaler.step(optimizer)
         scaler.update()
         total_loss += float(loss.float().detach()) * int(labels.numel())
         total_items += int(labels.numel())
+        progress.set_postfix(loss=f"{float(loss.float().detach()):.4f}")
     return total_loss / total_items if total_items else 0.0
 
 
@@ -339,3 +407,43 @@ def _compute_positive_class_weight(records: Sequence[ExternalImageRecord]) -> to
     if positives == 0 or negatives == 0:
         return None
     return torch.tensor(negatives / positives, dtype=torch.float32)
+
+
+def _build_balanced_sampler(
+    records: Sequence[ExternalImageRecord],
+) -> WeightedRandomSampler:
+    counts: dict[tuple[str, int], int] = {}
+    for record in records:
+        key = (record.dataset, record.label)
+        counts[key] = counts.get(key, 0) + 1
+    weights = [1.0 / counts[(record.dataset, record.label)] for record in records]
+    return WeightedRandomSampler(
+        weights=weights,
+        num_samples=len(records),
+        replacement=True,
+    )
+
+
+def build_external_warmup_metadata(
+    *,
+    config: AppConfig,
+    backbone_name: str,
+    image_size: int,
+    transform_profile: TransformProfile,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "seed": config.runtime.seed,
+        "backbone_name": backbone_name,
+        "image_size": image_size,
+        "transform_profile": transform_profile,
+        "external_warmup_epochs": config.train.external_warmup_epochs,
+        "external_warmup_batch_size": config.train.external_warmup_batch_size,
+        "external_warmup_num_workers": config.train.external_warmup_num_workers,
+        "external_warmup_learning_rate": config.train.external_warmup_learning_rate,
+        "external_warmup_max_samples": config.train.external_warmup_max_samples,
+        "external_sampler": config.train.external_sampler,
+    }
+    payload["metadata_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return payload

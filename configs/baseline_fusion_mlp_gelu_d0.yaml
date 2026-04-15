@@ -18,7 +18,7 @@ train:
   batch_size: 16
   image_size: 384
   epochs: 10
-  num_workers: 0
+  num_workers: 4
   transform_profile: baseline
   fusion_head_variant: mlp
   fusion_hidden_dim: 512

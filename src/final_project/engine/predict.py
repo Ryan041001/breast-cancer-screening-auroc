@@ -30,6 +30,7 @@ def build_prediction_loader(
     num_workers: int,
     *,
     transform_profile: TransformProfile = "baseline",
+    cache_mode: str = "preprocess",
     use_cuda: bool = False,
 ) -> DataLoader[PredictionBatch]:
     dataset = PairedBreastDataset(
@@ -37,6 +38,7 @@ def build_prediction_loader(
         image_size=image_size,
         training=False,
         transform_profile=transform_profile,
+        cache_mode=cache_mode,
     )
     if num_workers > 0:
         return cast(

@@ -88,6 +88,7 @@ def test_build_training_loader_forwards_transform_profile(
             image_size,
             training,
             transform_profile,
+            cache_mode,
         ) -> None:
             observed.update(
                 {
@@ -95,6 +96,7 @@ def test_build_training_loader_forwards_transform_profile(
                     "image_size": image_size,
                     "training": training,
                     "transform_profile": transform_profile,
+                    "cache_mode": cache_mode,
                 }
             )
 
@@ -136,6 +138,7 @@ def test_build_training_loader_forwards_transform_profile(
     assert observed["image_size"] == 32
     assert observed["training"] is True
     assert observed["transform_profile"] == expected_profile
+    assert observed["cache_mode"] == "preprocess"
 
 
 def test_fit_model_passes_transform_profile_to_train_and_val_loaders(
@@ -152,9 +155,10 @@ def test_fit_model_passes_transform_profile_to_train_and_val_loaders(
         training,
         *,
         transform_profile,
+        cache_mode,
         use_cuda=False,
     ):
-        loader_calls.append((training, transform_profile, use_cuda))
+        loader_calls.append((training, transform_profile, cache_mode, use_cuda))
         return object()
 
     monkeypatch.setattr(
@@ -178,7 +182,8 @@ def test_fit_model_passes_transform_profile_to_train_and_val_loaders(
         device,
         *,
         use_cuda=False,
-        scaler=None: 0.2,
+        scaler=None,
+        grad_accum_steps=1: 0.2,
     )
     monkeypatch.setattr(
         "final_project.engine.trainer.evaluate_model",
@@ -202,7 +207,10 @@ def test_fit_model_passes_transform_profile_to_train_and_val_loaders(
         transform_profile="normaug",
     )
 
-    assert loader_calls == [(True, "normaug", False), (False, "normaug", False)]
+    assert loader_calls == [
+        (True, "normaug", "preprocess", False),
+        (False, "normaug", "preprocess", False),
+    ]
     assert (trainer.checkpoints_dir / "best.pt").exists()
     assert evaluation.predictions == {"200_L": 0.9}
 
@@ -221,9 +229,10 @@ def test_fit_full_model_passes_transform_profile_to_loader(
         training,
         *,
         transform_profile,
+        cache_mode,
         use_cuda=False,
     ):
-        loader_calls.append((training, transform_profile, use_cuda))
+        loader_calls.append((training, transform_profile, cache_mode, use_cuda))
         return object()
 
     monkeypatch.setattr(
@@ -247,7 +256,8 @@ def test_fit_full_model_passes_transform_profile_to_loader(
         device,
         *,
         use_cuda=False,
-        scaler=None: 0.2,
+        scaler=None,
+        grad_accum_steps=1: 0.2,
     )
 
     trainer = fit_full_model(
@@ -262,7 +272,7 @@ def test_fit_full_model_passes_transform_profile_to_loader(
         transform_profile="normaug",
     )
 
-    assert loader_calls == [(True, "normaug", False)]
+    assert loader_calls == [(True, "normaug", "preprocess", False)]
     assert (trainer.checkpoints_dir / "best.pt").exists()
 
 

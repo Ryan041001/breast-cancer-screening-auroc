@@ -65,6 +65,7 @@ def test_build_prediction_loader_forwards_transform_profile(
             image_size,
             training,
             transform_profile,
+            cache_mode,
         ) -> None:
             observed.update(
                 {
@@ -72,6 +73,7 @@ def test_build_prediction_loader_forwards_transform_profile(
                     "image_size": image_size,
                     "training": training,
                     "transform_profile": transform_profile,
+                    "cache_mode": cache_mode,
                 }
             )
 
@@ -113,6 +115,7 @@ def test_build_prediction_loader_forwards_transform_profile(
     assert observed["image_size"] == 32
     assert observed["training"] is False
     assert observed["transform_profile"] == expected_profile
+    assert observed["cache_mode"] == "preprocess"
 
 
 def test_run_cv_reports_startup_and_fold_progress(
@@ -210,9 +213,16 @@ def test_run_cv_reports_startup_and_fold_progress(
         device,
         output_dir,
         learning_rate=1e-3,
+        weight_decay=1e-2,
+        scheduler_name="none",
+        min_lr=0.0,
+        freeze_backbone_epochs=0,
+        grad_accum_steps=1,
+        cache_mode="preprocess",
         transform_profile,
     ):
         assert transform_profile == "normaug"
+        assert cache_mode == "preprocess"
         fold = int(output_dir.name.rsplit("_", maxsplit=1)[-1])
         return SimpleNamespace(model=f"model-{fold}"), EvaluationResult(
             loss=0.1,
@@ -223,14 +233,16 @@ def test_run_cv_reports_startup_and_fold_progress(
     monkeypatch.setattr("final_project.engine.run_cv.fit_model", fake_fit_model)
     monkeypatch.setattr(
         "final_project.engine.run_cv.build_prediction_loader",
-        lambda records, image_size, batch_size, num_workers, *, transform_profile: [
-            (records, transform_profile)
+        lambda records, image_size, batch_size, num_workers, *, transform_profile, cache_mode: [
+            (records, transform_profile, cache_mode)
         ],
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.predict_probabilities",
         lambda model, batches, device: {
-            "T_001": 0.4 if model == "model-0" and batches[0][1] == "normaug" else 0.6
+            "T_001": 0.4
+            if model == "model-0" and batches[0][1] == "normaug" and batches[0][2] == "preprocess"
+            else 0.6
         },
     )
     monkeypatch.setattr(

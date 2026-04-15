@@ -8,7 +8,7 @@ from PIL import Image
 from torchvision import transforms
 
 
-TransformProfile = Literal["baseline", "normaug"]
+TransformProfile = Literal["baseline", "normaug", "normonly"]
 
 
 def build_image_transform(
@@ -23,7 +23,7 @@ def build_image_transform(
         flip_probability = 0.5 if transform_profile == "normaug" else 0.0
         steps.append(transforms.RandomHorizontalFlip(p=flip_probability))
     steps.append(transforms.ToTensor())
-    if transform_profile == "normaug":
+    if transform_profile in {"normaug", "normonly"}:
         steps.append(
             transforms.Normalize(
                 mean=(0.485, 0.456, 0.406),

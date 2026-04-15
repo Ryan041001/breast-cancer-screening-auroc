@@ -1,5 +1,5 @@
 experiment:
-  name: baseline
+  name: baseline_mammonet32k_mainline_v1
 
 paths:
   project_root: ..
@@ -8,34 +8,35 @@ paths:
   test_images: test_img
   submission_template: name_sid_submission.csv
   output_root: outputs
-  external_data_root: null
+  external_data_root: MammoNet32k_new/MammoNet32k_new
 
 runtime:
   seed: 42
   device: cuda
 
 train:
-  folds: 5
+  folds: 3
   batch_size: 16
   image_size: 384
-  epochs: 10
+  epochs: 8
   num_workers: 4
   transform_profile: baseline
   fusion_head_variant: linear
-  fusion_hidden_dim: 512
+  fusion_hidden_dim: 256
   fusion_dropout: 0.0
   fusion_activation: gelu
   fusion_layer_norm: false
   fusion_residual: false
-  learning_rate: 0.001
-  weight_decay: 0.01
-  scheduler: none
-  min_lr: 0.0
-  freeze_backbone_epochs: 0
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  scheduler: cosine
+  min_lr: 0.000001
+  freeze_backbone_epochs: 1
   grad_accum_steps: 1
   cache_mode: preprocess
-  external_warmup_epochs: 0
+  external_warmup_epochs: 4
   external_warmup_batch_size: 32
   external_warmup_num_workers: 4
-  external_warmup_learning_rate: 0.001
-  external_sampler: none
+  external_warmup_learning_rate: 0.0005
+  external_warmup_max_samples: null
+  external_sampler: dataset_label_balanced

@@ -130,6 +130,13 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
             device=config.runtime.device,
             output_dir=fold_dir,
             transform_profile=transform_profile,
+            learning_rate=config.train.learning_rate,
+            weight_decay=config.train.weight_decay,
+            scheduler_name=config.train.scheduler,
+            min_lr=config.train.min_lr,
+            freeze_backbone_epochs=config.train.freeze_backbone_epochs,
+            grad_accum_steps=config.train.grad_accum_steps,
+            cache_mode=config.train.cache_mode,
         )
         test_predictions = predict_probabilities(
             trainer.model,
@@ -139,6 +146,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
                 batch_size=config.train.batch_size,
                 num_workers=config.train.num_workers,
                 transform_profile=transform_profile,
+                cache_mode=config.train.cache_mode,
             ),
             device=config.runtime.device,
         )

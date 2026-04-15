@@ -65,7 +65,11 @@ _ReturnT = TypeVar("_ReturnT")
 def _get_transform_profile(config: object) -> TransformProfile:
     train_config = getattr(config, "train", None)
     transform_profile = getattr(train_config, "transform_profile", "baseline")
-    return "normaug" if transform_profile == "normaug" else "baseline"
+    if transform_profile == "normaug":
+        return "normaug"
+    if transform_profile == "normonly":
+        return "normonly"
+    return "baseline"
 
 
 def _call_with_transform_profile(
@@ -149,6 +153,7 @@ def _run_train(args: CommandArgs) -> int:
         image_size=config.train.image_size,
         training=False,
         transform_profile=transform_profile,
+        cache_mode=config.train.cache_mode,
     )
     sample = dataset[0]
 
@@ -204,6 +209,13 @@ def _run_train(args: CommandArgs) -> int:
         epochs=config.train.epochs,
         device=config.runtime.device,
         output_dir=run_dir,
+        learning_rate=config.train.learning_rate,
+        weight_decay=config.train.weight_decay,
+        scheduler_name=config.train.scheduler,
+        min_lr=config.train.min_lr,
+        freeze_backbone_epochs=config.train.freeze_backbone_epochs,
+        grad_accum_steps=config.train.grad_accum_steps,
+        cache_mode=config.train.cache_mode,
     )
     checkpoint_path = trainer.checkpoints_dir / "best.pt"
     print("train:", f"checkpoint={checkpoint_path}")
@@ -235,6 +247,7 @@ def _run_predict(args: CommandArgs) -> int:
         image_size=config.train.image_size,
         batch_size=config.train.batch_size,
         num_workers=config.train.num_workers,
+        cache_mode=config.train.cache_mode,
     )
     if cv_checkpoints:
         prediction_sets: list[dict[str, float]] = []
@@ -256,6 +269,7 @@ def _run_predict(args: CommandArgs) -> int:
                 image_size=config.train.image_size,
                 batch_size=config.train.batch_size,
                 num_workers=config.train.num_workers,
+                cache_mode=config.train.cache_mode,
             )
         predictions = {
             breast_id: sum(pred[breast_id] for pred in prediction_sets)
