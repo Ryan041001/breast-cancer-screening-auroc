@@ -17,6 +17,7 @@ EXPECTED_COMMANDS = [
     "submit",
     "run-cv",
     "tune-iterate",
+    "blend",
 ]
 
 
@@ -322,6 +323,39 @@ def test_tune_iterate_runs_batch_tuning_summary(
     command_output = capsys.readouterr().out
     assert "leaderboard=" in command_output
     assert "best_blend_dir=" in command_output
+
+
+def test_blend_runs_from_json_spec(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_blend_from_spec(
+        spec_path: Path,
+        *,
+        runs_root: Path,
+    ) -> SimpleNamespace:
+        captured["spec_path"] = spec_path
+        captured["runs_root"] = runs_root
+        return SimpleNamespace(
+            oof_auc=0.9755,
+            members=("a", "b"),
+            output_dir=Path("outputs/runs/blend_demo"),
+        )
+
+    monkeypatch.setattr(cli, "run_blend_from_spec", fake_run_blend_from_spec)
+
+    exit_code = cli.main(
+        ["blend", "--spec", str(Path("outputs/research/demo.json"))]
+    )
+
+    assert exit_code == 0
+    assert captured["spec_path"] == Path("outputs/research/demo.json")
+    assert captured["runs_root"] == Path("outputs") / "runs"
+    command_output = capsys.readouterr().out
+    assert "oof_auc=0.975500" in command_output
+    assert "members=2" in command_output
 
 
 @pytest.mark.parametrize(

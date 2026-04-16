@@ -26,6 +26,7 @@ from .engine.external_warmup import (
     maybe_prepare_external_warmup,
 )
 from .engine.tuning import run_tuning_iteration
+from .engine.blending import run_blend_from_spec
 from .engine.submission import (
     read_prediction_table,
     write_prediction_table,
@@ -41,6 +42,7 @@ class CommandArgs:
     command: str
     config: Path | None
     configs: tuple[Path, ...]
+    spec: Path | None
     dry_run_loader: bool
     dry_run_model: bool
     report_name: str
@@ -56,6 +58,7 @@ COMMAND_DESCRIPTIONS = {
     "submit": "Create a submission CSV from predictions.",
     "run-cv": "Run cross-validation end to end.",
     "tune-iterate": "Run a batch of configs and summarize tuning results.",
+    "blend": "Blend existing run outputs from a JSON spec.",
 }
 
 
@@ -353,6 +356,22 @@ def _run_tune_iterate(args: CommandArgs) -> int:
     return 0
 
 
+def _run_blend(args: CommandArgs) -> int:
+    if args.spec is None:
+        raise ValueError("blend requires --spec")
+    artifacts = run_blend_from_spec(
+        args.spec,
+        runs_root=Path("outputs") / "runs",
+    )
+    print(
+        "blend:",
+        f"oof_auc={artifacts.oof_auc:.6f}",
+        f"members={len(artifacts.members)}",
+        f"output_dir={artifacts.output_dir}",
+    )
+    return 0
+
+
 def _run_command(args: CommandArgs) -> int:
     if args.command == "build-manifest":
         return _run_build_manifest(args)
@@ -368,6 +387,8 @@ def _run_command(args: CommandArgs) -> int:
         return _run_cv(args)
     if args.command == "tune-iterate":
         return _run_tune_iterate(args)
+    if args.command == "blend":
+        return _run_blend(args)
     return _run_stub(args)
 
 
@@ -404,6 +425,13 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Re-run experiments even if outputs/runs/<experiment>/cv/metrics.json already exists.",
             )
+        elif command == "blend":
+            _ = subparser.add_argument(
+                "--spec",
+                type=Path,
+                required=True,
+                help="Path to a blend JSON spec with run_map and weights.",
+            )
         else:
             _ = subparser.add_argument(
                 "--config",
@@ -435,17 +463,20 @@ def _parse_args(
     command_obj: object = getattr(namespace, "command", None)
     config_obj: object = getattr(namespace, "config", None)
     configs_obj: object = getattr(namespace, "configs", ())
+    spec_obj: object = getattr(namespace, "spec", None)
 
     if not isinstance(command_obj, str):
         parser.error("A command is required.")
 
-    if command_obj != "tune-iterate" and not isinstance(config_obj, Path):
+    if command_obj not in {"tune-iterate", "blend"} and not isinstance(config_obj, Path):
         parser.error("--config must be a valid path.")
     if command_obj == "tune-iterate":
         if not isinstance(configs_obj, list) or not all(
             isinstance(item, Path) for item in configs_obj
         ):
             parser.error("--configs must be one or more valid paths.")
+    if command_obj == "blend" and not isinstance(spec_obj, Path):
+        parser.error("--spec must be a valid path.")
 
     dry_run_loader = bool(getattr(namespace, "dry_run_loader", False))
     dry_run_model = bool(getattr(namespace, "dry_run_model", False))
@@ -456,6 +487,7 @@ def _parse_args(
         command=command_obj,
         config=config_obj if isinstance(config_obj, Path) else None,
         configs=tuple(configs_obj) if isinstance(configs_obj, list) else (),
+        spec=spec_obj if isinstance(spec_obj, Path) else None,
         dry_run_loader=dry_run_loader,
         dry_run_model=dry_run_model,
         report_name=str(report_name_obj),
