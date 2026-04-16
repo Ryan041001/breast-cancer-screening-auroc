@@ -45,6 +45,9 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.paths.output_root == repo_root / "outputs"
     assert config.runtime.seed == 7
     assert config.runtime.device == "cuda"
+    assert config.runtime.fold_seed is None
+    assert config.runtime.train_seed is None
+    assert config.runtime.warmup_seed is None
     assert config.train.batch_size == 2
     assert config.train.image_size == 384
     assert config.train.transform_profile == "baseline"
@@ -356,6 +359,25 @@ def test_load_config_rejects_missing_runtime_seed_with_validation_error(
 
     with pytest.raises(ValueError, match="runtime"):
         _ = load_config(bad_config)
+
+
+def test_load_config_accepts_optional_runtime_seed_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "runtime_seeds.yaml"
+    payload = _base_payload()
+    payload["runtime"] = {
+        "seed": 7,
+        "device": "cpu",
+        "fold_seed": 11,
+        "train_seed": 13,
+        "warmup_seed": 17,
+    }
+    _write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.runtime.fold_seed == 11
+    assert config.runtime.train_seed == 13
+    assert config.runtime.warmup_seed == 17
 
 
 @pytest.mark.parametrize(

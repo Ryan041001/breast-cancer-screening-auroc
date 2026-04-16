@@ -212,3 +212,17 @@ def test_maybe_prepare_external_warmup_reuses_matching_checkpoint_from_other_run
     assert json.loads(
         (target_output_dir / "shared_warmup.json").read_text(encoding="utf-8")
     )["checkpoint_path"] == str(reused.resolve())
+
+
+def test_build_external_warmup_metadata_prefers_warmup_seed() -> None:
+    config = _make_config()
+    config.runtime.warmup_seed = 23
+
+    metadata = build_external_warmup_metadata(
+        config=config,
+        backbone_name="efficientnet_b0",
+        image_size=384,
+        transform_profile="baseline",
+    )
+
+    assert metadata["seed"] == 23

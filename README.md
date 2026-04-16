@@ -1,78 +1,87 @@
 # Mammography Final Project
 
-当前主任务是 internal breast-level paired CC/MLO 二分类。`MammoNet32k_new` 只用于 single-image warm-up，不直接替代 paired 主训练集。
+当前主任务仍然是 internal breast-level paired CC/MLO 二分类。
+`MammoNet32k_new` 只用于 external single-image warm-up，不直接替代 paired 主训练集。
 
-## Current Leaders
+## Current State
 
-- 第一单模：
+- 当前第一单模:
   `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4`
   - `mean_auc = 0.967337`
-- 第一 blend：
-  `blend_best12_plus_baselinev2normaug_refined`
-  - `oof_auc = 0.977119`
+  - [metrics.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4/cv/metrics.json)
+- 当前第一 blend:
+  `blend_best14_pruned_refined`
+  - `oof_auc = 0.97799770028811`
+  - [blend.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/blend_best14_pruned_refined/blend.json)
+  - [submission.csv](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/submissions/blend_best14_pruned_refined_submission.csv)
 
-对应产物：
-- `outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4/cv/metrics.json`
-- `outputs/runs/blend_best12_plus_baselinev2normaug_refined/blend.json`
-- `outputs/submissions/blend_best12_plus_baselinev2normaug_refined_submission.csv`
+`best14` 是从 `best13` 做 leave-one-out prune 得到的。
+确认移除的两个成员是:
+- `f5_cosine`
+- `cv3_control_seed123`
 
-## Current Bottleneck
+对应报告:
+- [blend_best13_leave_one_out.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/blend_best13_leave_one_out.json)
+- [2026-04-16_model_bottleneck_report.md](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/2026-04-16_model_bottleneck_report.md)
 
-工程基础已经补齐，当前瓶颈是 residual diversity 的边际递减，不再是缺训练开关。
+## Verified Protocol
 
-当前不建议：
-- 继续把 `baseline_mammonet32k_mainline_v1` / `mainline_v1_f5` 当主线推进
-- 继续堆只能带来 `1e-5` 到 `5e-5` 增益的弱 blend 成员
-- 在 `fusion_head_variant: linear` 下测试 `fusion_hidden_dim` 一类参数并把它当有效实验
+当前已经完成并验证的协议内工作:
 
-## Recommended Next Experiments
+1. `best13` leave-one-out prune
+2. `splitter-v2 + fold_seed/train_seed/warmup_seed` 解耦
+3. splitv2 下的两条最小对照线
 
-优先顺序固定为两发：
+splitv2 两条协议内结果:
 
-1. `configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine.yaml`
-2. `configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr8e4.yaml`
+- `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2`
+  - `mean_auc = 0.9699796059675092`
+  - `oof_auc = 0.9602718311132931`
+- `baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine_splitv2`
+  - `mean_auc = 0.9604119079205485`
+  - `oof_auc = 0.9574294905750572`
+- pair blend in splitv2 universe only:
+  - best weight = `0.464 * new_champion_splitv2 + 0.536 * f5_e5_cosine_splitv2`
+  - `oof_auc = 0.9635146832728259`
+  - gain over splitv2 baseline = `+0.003242852159532794`
 
-只有当其中任一配置加入当前 best12 blend 后带来 `> 1e-4` 的 OOF 增益时，才继续做组合版。
+对应文件:
+- [fold_audit.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2/cv/fold_audit.json)
+- [splitv2_pair_blend_eval.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/splitv2_pair_blend_eval.json)
+
+重要规则:
+- splitv2 是新的 CV 宇宙
+- 不把 splitv2 的 OOF AUC 直接和旧 `best14` 宇宙一一比较
+- 只在 splitv2 内部比较 `new_champion_splitv2`、`f5_e5_cosine_splitv2` 及其组合
 
 ## Warm-up Reuse
 
-shared warm-up 目录：
-- `outputs/runs/_shared_external_warmup/<metadata_hash>/`
+当前 shared warm-up 复用目录:
 
-复用条件包括：
+- `outputs/runs/_shared_external_warmup/7159fb51f1f5fd90896bc62b8a70745cc59d5491c7e6301aa4edf0a5190e5eb3/`
+
+当前复用规则:
+
 - external 数据 contract 相同
-- 数据签名相同
 - warm-up 超参相同
-- `seed` 相同
+- `warmup_seed` 相同
+- 数据签名相同
 
-所以只改 paired finetune / CV / blend 的 config，可以共用同一个 warm-up；改 seed 则会形成新的 warm-up family。
+因此:
+- 只改 paired finetune / CV / blend，可以复用同一个 warm-up
+- 只改 `train_seed` 或 `fold_seed`，不会强制开新 warm-up family
+- 改 `warmup_seed` 才会生成新的 warm-up family
 
-## Practical Notes
+## Current Bottleneck
 
-- `fusion_head_variant=linear` 时，`fusion_hidden_dim` / `fusion_dropout` / `fusion_activation` / `fusion_layer_norm` / `fusion_residual` 都会被忽略。CLI 和 `run-cv` 现在会显式告警。
-- `run-cv` 的 fusion eval reference 现在应该显式配置，而不是默认只锚定 `baseline`。默认值仍是 `baseline`，但可以通过 `train.fusion_eval_reference_run` 修改。
+当前瓶颈不是工程缺项，而是 residual diversity 的边际递减。
 
-## Commands
+明确不要做:
 
-安装依赖：
-
-```bash
-uv sync --extra train --group dev
-```
-
-运行 CV：
-
-```bash
-uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine.yaml
-uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr8e4.yaml
-```
-
-external 数据审计：
-
-```bash
-uv run python scripts/external_audit.py
-uv run python scripts/build_external_paired_highconf.py
-```
+- 不要继续把 `mainline_v1_f5` 当主线推进
+- 不要在 `fusion_head_variant: linear` 下继续扫 `fusion_hidden_dim`
+- 不要把 external paired 子集提前升级成主研究线
+- 不要把 splitv2 结果直接混进旧宇宙的 blend 排名
 
 ## Layout
 

@@ -156,7 +156,7 @@ def test_run_cv_reports_startup_and_fold_progress(
             submission_template=tmp_path / "submission.csv",
             output_root=tmp_path / "outputs",
         ),
-        runtime=RuntimeConfig(seed=42, device="cpu"),
+        runtime=RuntimeConfig(seed=42, device="cpu", fold_seed=11, train_seed=13),
         train=TrainConfig(
             folds=2,
             batch_size=2,
@@ -168,8 +168,9 @@ def test_run_cv_reports_startup_and_fold_progress(
         ),
     )
 
+    seen_seeds: list[int] = []
     monkeypatch.setattr(
-        "final_project.engine.run_cv.set_global_seed", lambda seed: None
+        "final_project.engine.run_cv.set_global_seed", lambda seed: seen_seeds.append(seed)
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.build_train_manifest",
@@ -181,7 +182,7 @@ def test_run_cv_reports_startup_and_fold_progress(
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.assign_deterministic_folds",
-        lambda manifest, num_folds, seed: {"100_L": 0, "101_R": 1},
+        lambda manifest, num_folds, seed: {"100_L": 0, "101_R": 1} if seed == 11 else (_ for _ in ()).throw(AssertionError("unexpected fold seed")),
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.PairedBreastModel",
@@ -264,12 +265,14 @@ def test_run_cv_reports_startup_and_fold_progress(
     assert "run-cv: fold 1/2 done auc=0.700000" in command_output
     assert "run-cv: fold 2/2 done auc=0.800000" in command_output
     assert artifacts.summary.mean_auc == 0.75
+    assert seen_seeds == [13, 13]
     assert str(loaded_warmup["checkpoint_path"]).endswith("best.pt")
     log_text = (tmp_path / "outputs" / "runs" / "progress-test" / "cv" / "run.log").read_text(
         encoding="utf-8"
     )
     assert "run-cv: manifests ready" in log_text
     assert "run-cv: complete mean_auc=0.750000" in log_text
+    assert (tmp_path / "outputs" / "runs" / "progress-test" / "cv" / "fold_audit.json").exists()
 
 
 def test_run_cv_uses_configured_fusion_eval_reference_run(

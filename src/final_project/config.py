@@ -50,6 +50,9 @@ class PathsConfig:
 class RuntimeConfig:
     seed: int
     device: str
+    fold_seed: int | None = None
+    train_seed: int | None = None
+    warmup_seed: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +136,17 @@ def _require_int(payload: Mapping[str, object], key: str) -> int:
     if key not in payload:
         raise ValueError(f"Missing required config key '{key}'")
     value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Config key '{key}' must be an integer")
+    return value
+
+
+def _optional_int(payload: Mapping[str, object], key: str) -> int | None:
+    if key not in payload:
+        return None
+    value = payload[key]
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"Config key '{key}' must be an integer")
     return value
@@ -410,6 +424,9 @@ def load_config(config_path: str | Path) -> AppConfig:
         runtime=RuntimeConfig(
             seed=_require_int(runtime_payload, "seed"),
             device=_require_string(runtime_payload, "device"),
+            fold_seed=_optional_int(runtime_payload, "fold_seed"),
+            train_seed=_optional_int(runtime_payload, "train_seed"),
+            warmup_seed=_optional_int(runtime_payload, "warmup_seed"),
         ),
         train=TrainConfig(
             folds=_require_int_at_least(train_payload, "folds", 2),

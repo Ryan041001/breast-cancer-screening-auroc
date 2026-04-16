@@ -25,6 +25,7 @@ from ..data.transforms import TransformProfile
 from ..model.backbone import TimmBackbone
 from ..model.metrics import binary_auroc
 from ..utils.logging import log_message
+from ..utils.repro import set_global_seed
 
 
 class ExternalBatch(TypedDict):
@@ -68,6 +69,7 @@ def run_external_warmup(
     image_size: int,
     transform_profile: TransformProfile,
 ) -> ExternalWarmupArtifacts:
+    set_global_seed(_get_warmup_seed(config))
     if config.paths.external_data_root is None:
         raise ValueError("External warmup requires 'paths.external_data_root'")
     if config.paths.external_catalog is None or config.paths.external_splits_dir is None:
@@ -515,7 +517,7 @@ def build_external_warmup_metadata(
     transform_profile: TransformProfile,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
-        "seed": config.runtime.seed,
+        "seed": _get_warmup_seed(config),
         "backbone_name": backbone_name,
         "image_size": image_size,
         "transform_profile": transform_profile,
@@ -532,6 +534,10 @@ def build_external_warmup_metadata(
         json.dumps(payload, sort_keys=True).encode("utf-8")
     ).hexdigest()
     return payload
+
+
+def _get_warmup_seed(config: AppConfig) -> int:
+    return getattr(config.runtime, "warmup_seed", None) or config.runtime.seed
 
 
 def _build_external_data_signature(config: AppConfig) -> str:

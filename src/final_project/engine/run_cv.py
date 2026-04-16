@@ -14,6 +14,7 @@ from ..data.manifest import (
     build_train_manifest,
 )
 from ..data.splits import assign_deterministic_folds
+from ..data.splits import build_fold_audit
 from ..data.transforms import TransformProfile
 from ..model.fusion import FusionHeadConfig, PairedBreastModel
 from ..utils.paths import build_output_paths
@@ -64,7 +65,9 @@ def summarize_cv_results(fold_results: list[FoldRunResult]) -> CVSummary:
 
 
 def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
-    set_global_seed(config.runtime.seed)
+    train_seed = config.runtime.train_seed or config.runtime.seed
+    fold_seed = config.runtime.fold_seed or config.runtime.seed
+    set_global_seed(train_seed)
     output_paths = build_output_paths(config.paths.output_root)
     run_dir = output_paths.runs / config.experiment.name / "cv"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +86,14 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
     assignments = assign_deterministic_folds(
         train_manifest,
         num_folds=config.train.folds,
-        seed=config.runtime.seed,
+        seed=fold_seed,
+    )
+    _write_fold_audit(
+        train_manifest=train_manifest,
+        assignments=assignments,
+        num_folds=config.train.folds,
+        output_dir=run_dir,
+        fold_seed=fold_seed,
     )
     transform_profile = cast(TransformProfile, config.train.transform_profile)
     _log_ignored_linear_fusion_settings(run_dir, config)
@@ -94,6 +104,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         image_size=config.train.image_size,
         transform_profile=transform_profile,
     )
+    set_global_seed(train_seed)
 
     fusion_head_config = FusionHeadConfig.from_train_config(config.train)
 
@@ -231,6 +242,22 @@ def _write_fold_metrics(summary: CVSummary, output_dir: Path) -> None:
         writer.writeheader()
         for fold, auc in sorted(summary.fold_metrics.items()):
             writer.writerow({"fold": fold, "auc": auc})
+
+
+def _write_fold_audit(
+    *,
+    train_manifest: list[BreastManifestRecord],
+    assignments: dict[str, int],
+    num_folds: int,
+    output_dir: Path,
+    fold_seed: int,
+) -> None:
+    audit = build_fold_audit(train_manifest, assignments, num_folds)
+    audit["fold_seed"] = fold_seed
+    (output_dir / "fold_audit.json").write_text(
+        json.dumps(audit, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _try_write_fusion_eval(
