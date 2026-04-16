@@ -1,46 +1,58 @@
 # Mammography Final Project
 
-基于双视图乳腺 X 光图像的恶性概率预测项目。当前仓库的主任务是 internal breast-level paired classification，external `MammoNet32k_new` 只作为 single-image warm-up 数据源使用。
+当前主任务是 internal breast-level paired CC/MLO 二分类。`MammoNet32k_new` 只用于 single-image warm-up，不直接替代 paired 主训练集。
 
-## 当前主线
+## Current Leaders
 
-当前不要把 `baseline_mammonet32k_mainline_v1` 当成新主线继续推。
+- 第一单模：
+  `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4`
+  - `mean_auc = 0.967337`
+- 第一 blend：
+  `blend_best12_plus_baselinev2normaug_refined`
+  - `oof_auc = 0.977119`
 
-现阶段固定结论：
+对应产物：
+- `outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4/cv/metrics.json`
+- `outputs/runs/blend_best12_plus_baselinev2normaug_refined/blend.json`
+- `outputs/submissions/blend_best12_plus_baselinev2normaug_refined_submission.csv`
 
-- 第一单模：`baseline_mammonet32k_warmup_e4_lr5e4`
-- 第一 blend：`baseline 0.2 + baseline_mammonet32k_warmup_e4_lr5e4 0.8`
+## Current Bottleneck
 
-当前最重要的下一步不是换 backbone，而是对冠军线做 paired finetune 控制项的拆解式移植和筛选。
+工程基础已经补齐，当前瓶颈是 residual diversity 的边际递减，不再是缺训练开关。
 
-详细执行方向见 [docs/NEXT_STEPS_GUIDE.md](docs/NEXT_STEPS_GUIDE.md)。
+当前不建议：
+- 继续把 `baseline_mammonet32k_mainline_v1` / `mainline_v1_f5` 当主线推进
+- 继续堆只能带来 `1e-5` 到 `5e-5` 增益的弱 blend 成员
+- 在 `fusion_head_variant: linear` 下测试 `fusion_hidden_dim` 一类参数并把它当有效实验
 
-## Project Layout
+## Recommended Next Experiments
 
-```text
-Final_Project/
-├─ configs/
-├─ docs/
-│  ├─ NEXT_STEPS_GUIDE.md
-│  └─ superpowers/
-│     ├─ plans/
-│     └─ specs/
-├─ MammoNet32k_new/
-├─ outputs/
-│  ├─ research/
-│  ├─ runs/
-│  └─ submissions/
-├─ scripts/
-├─ src/final_project/
-│  ├─ data/
-│  ├─ engine/
-│  ├─ model/
-│  └─ utils/
-├─ tests/
-└─ main.py
-```
+优先顺序固定为两发：
 
-## Environment
+1. `configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine.yaml`
+2. `configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr8e4.yaml`
+
+只有当其中任一配置加入当前 best12 blend 后带来 `> 1e-4` 的 OOF 增益时，才继续做组合版。
+
+## Warm-up Reuse
+
+shared warm-up 目录：
+- `outputs/runs/_shared_external_warmup/<metadata_hash>/`
+
+复用条件包括：
+- external 数据 contract 相同
+- 数据签名相同
+- warm-up 超参相同
+- `seed` 相同
+
+所以只改 paired finetune / CV / blend 的 config，可以共用同一个 warm-up；改 seed 则会形成新的 warm-up family。
+
+## Practical Notes
+
+- `fusion_head_variant=linear` 时，`fusion_hidden_dim` / `fusion_dropout` / `fusion_activation` / `fusion_layer_norm` / `fusion_residual` 都会被忽略。CLI 和 `run-cv` 现在会显式告警。
+- `run-cv` 的 fusion eval reference 现在应该显式配置，而不是默认只锚定 `baseline`。默认值仍是 `baseline`，但可以通过 `train.fusion_eval_reference_run` 修改。
+
+## Commands
 
 安装依赖：
 
@@ -48,127 +60,28 @@ Final_Project/
 uv sync --extra train --group dev
 ```
 
-检查 GPU：
+运行 CV：
 
 ```bash
-uv run python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine.yaml
+uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr8e4.yaml
 ```
 
-## Main Commands
-
-基础流程：
-
-```bash
-uv run python main.py build-manifest --config configs/smoke.yaml
-uv run python main.py train --config configs/smoke.yaml
-uv run python main.py predict --config configs/smoke.yaml
-uv run python main.py submit --config configs/smoke.yaml
-uv run python main.py run-cv --config configs/smoke.yaml
-uv run python main.py tune-iterate --configs configs/baseline.yaml configs/retune_b8_e12.yaml --report-name round_1
-```
-
-调试入口：
-
-```bash
-uv run python main.py train --config configs/smoke.yaml --dry-run-loader
-uv run python main.py train --config configs/smoke.yaml --dry-run-model
-```
-
-external warm-up：
-
-```bash
-uv run python main.py warmup-external --config configs/smoke_mammonet32k_warmup.yaml
-uv run python main.py train --config configs/smoke_mammonet32k_warmup.yaml
-uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup.yaml
-```
-
-数据审计与辅助集生成：
+external 数据审计：
 
 ```bash
 uv run python scripts/external_audit.py
 uv run python scripts/build_external_paired_highconf.py
 ```
 
-## Modeling Contract
+## Layout
 
-### Internal paired task
-
-- 每个 `breast_id` 必须恰好对应一对 `CC + MLO`
-- 标签规则：同一乳房任一视图 `pathology == 'M'` 记为 `1`，否则为 `0`
-- 切分规则：patient-safe folds，同一病人的左右乳房不会跨 fold
-- 预处理：裁剪黑边，并将右乳规范到统一朝向
-
-### External warm-up
-
-- `MammoNet32k_new` 仅用于 single-image warm-up
-- `malignant -> 1`
-- `benign / normal -> 0`
-- `unknown pathology` 直接过滤
-- `unknown laterality / unknown view` 不做补全
-
-## Warm-up Reuse
-
-当前已支持 shared warm-up 复用。不同 config 只要 warm-up 数据 contract、数据签名、seed 和 warm-up 超参一致，就会复用同一份 warm-up。
-
-共享目录：
-
-- `outputs/runs/_shared_external_warmup/<metadata_hash>/`
-
-已验证的 clean-v1 shared warm-up：
-
-- metadata hash:
-  `7159fb51f1f5fd90896bc62b8a70745cc59d5491c7e6301aa4edf0a5190e5eb3`
-
-注意：
-
-- 旧的无 metadata warm-up checkpoint 会被保留
-- 但不会自动当成当前 clean contract 的可复用缓存
-- `transform_profile` 目前同时影响 warm-up 和 paired；`normonly` 会形成新的 warm-up family
-
-## Outputs
-
-- `outputs/runs/<experiment>/external_warmup/checkpoints/best.pt`
-- `outputs/runs/<experiment>/external_warmup/run.log`
-- `outputs/runs/<experiment>/full_train/checkpoints/best.pt`
-- `outputs/runs/<experiment>/full_train/run.log`
-- `outputs/runs/<experiment>/cv/oof_predictions.csv`
-- `outputs/runs/<experiment>/cv/test_predictions.csv`
-- `outputs/runs/<experiment>/cv/run.log`
-- `outputs/runs/<experiment>/cv/metrics.json`
-- `outputs/runs/<experiment>/cv/fusion_eval.json`
-- `outputs/research/<report_name>/leaderboard.json`
-- `outputs/research/<report_name>/leaderboard.csv`
-- `outputs/research/<report_name>/leaderboard.md`
-- `outputs/submissions/<experiment>_submission.csv`
-
-## Tuning Priority
-
-当前推荐顺序：
-
-1. 固定冠军生产线与冠军 blend
-2. 做 paired finetune 控制项的 `3-fold` quick screen
-3. 只把 quick screen 前 1 名升到 `5-fold`
-4. paired retune 收敛后，再做轻量 fusion head
-5. external paired high-confidence 子集只作为 train-only auxiliary 试验
-
-不要直接把 external 数据升格成新的 paired 主训练集。
-
-## External Libraries / Models / Data Attribution
-
-### Libraries
-
-- `torch` / `torchvision`: 训练、推理、数据加载与图像变换
-- `timm`: backbone 构建与 ImageNet 预训练权重加载
-- `scikit-learn`: AUROC 计算
-- `Pillow`: 图像读取与基础预处理
-- `PyYAML`: 配置加载
-- `numpy` / `pandas` / `tqdm`: 实验与数据处理辅助
-
-### Pretrained models / weights
-
-- `timm` pretrained backbones: 当前默认通过 `timm.create_model(...)` 使用 ImageNet 预训练权重初始化视觉 backbone
-
-### Data sources
-
-- 课程数据：`train.csv` / `train_img` / `test_img` / `name_sid_submission.csv`
-- `MammoNet32k_new`：external public mammography dataset，用于 backbone warm-up，不直接替代主任务 paired 训练集
+```text
+configs/
+docs/
+outputs/
+scripts/
+src/final_project/
+tests/
+main.py
+```

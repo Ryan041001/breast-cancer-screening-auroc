@@ -86,6 +86,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         seed=config.runtime.seed,
     )
     transform_profile = cast(TransformProfile, config.train.transform_profile)
+    _log_ignored_linear_fusion_settings(run_dir, config)
     warmup_checkpoint = maybe_prepare_external_warmup(
         config,
         backbone_name=DEFAULT_BACKBONE_NAME,
@@ -184,6 +185,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         config.paths.output_root,
         summary,
         labels_by_id,
+        reference_run=config.train.fusion_eval_reference_run,
     )
     log_message(
         run_dir,
@@ -236,21 +238,29 @@ def _try_write_fusion_eval(
     output_root: Path,
     summary: CVSummary,
     labels: dict[str, int],
+    *,
+    reference_run: str,
 ) -> None:
-    """If a baseline OOF reference exists, compute and write fusion_eval.json."""
+    """If an OOF reference exists, compute and write fusion_eval.json."""
     from ..utils.paths import build_output_paths
 
     baseline_oof_path = (
-        build_output_paths(output_root).runs / "baseline" / "cv" / "oof_predictions.csv"
+        build_output_paths(output_root).runs / reference_run / "cv" / "oof_predictions.csv"
     )
     if not baseline_oof_path.exists():
-        log_message(run_dir, "run-cv: no baseline OOF found, skipping fusion eval")
+        log_message(
+            run_dir,
+            f"run-cv: no fusion eval reference OOF found run={reference_run}, skipping fusion eval",
+        )
         return
 
     try:
         baseline_oof = read_prediction_table_strict(baseline_oof_path)
     except (ValueError, FileNotFoundError) as exc:
-        log_message(run_dir, f"run-cv: cannot load baseline OOF: {exc}")
+        log_message(
+            run_dir,
+            f"run-cv: cannot load fusion eval reference run={reference_run}: {exc}",
+        )
         return
 
     candidate_oof = summary.oof_predictions
@@ -259,7 +269,7 @@ def _try_write_fusion_eval(
     if set(baseline_oof.keys()) != set(candidate_oof.keys()):
         log_message(
             run_dir,
-            "run-cv: baseline/candidate OOF key mismatch, skipping fusion eval",
+            f"run-cv: fusion eval reference/candidate OOF key mismatch run={reference_run}, skipping fusion eval",
         )
         return
     if set(baseline_oof.keys()) != set(labels.keys()):
@@ -292,6 +302,30 @@ def _try_write_fusion_eval(
     log_message(
         run_dir,
         f"run-cv: fusion eval written"
+        f" reference_run={reference_run}"
         f" candidate_auc={report.candidate_oof_auc:.6f}"
         f" blend_gain={report.blend_gain_over_baseline:+.6f}",
+    )
+
+
+def _log_ignored_linear_fusion_settings(run_dir: Path, config: AppConfig) -> None:
+    if config.train.fusion_head_variant != "linear":
+        return
+    ignored_fields: list[str] = []
+    if config.train.fusion_hidden_dim != 512:
+        ignored_fields.append(f"fusion_hidden_dim={config.train.fusion_hidden_dim}")
+    if config.train.fusion_dropout != 0.0:
+        ignored_fields.append(f"fusion_dropout={config.train.fusion_dropout}")
+    if config.train.fusion_activation != "gelu":
+        ignored_fields.append(f"fusion_activation={config.train.fusion_activation}")
+    if config.train.fusion_layer_norm:
+        ignored_fields.append("fusion_layer_norm=true")
+    if config.train.fusion_residual:
+        ignored_fields.append("fusion_residual=true")
+    if not ignored_fields:
+        return
+    log_message(
+        run_dir,
+        "run-cv: fusion_head_variant=linear ignores "
+        + ", ".join(ignored_fields),
     )

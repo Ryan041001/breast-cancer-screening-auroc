@@ -403,3 +403,32 @@ def test_python_module_entrypoint_lists_expected_commands() -> None:
     assert completed.returncode == 0
     for command in EXPECTED_COMMANDS:
         assert command in completed.stdout
+
+
+def test_train_warns_when_linear_head_ignores_fusion_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _make_config()
+    config.train.fusion_head_variant = "linear"
+    config.train.fusion_hidden_dim = 256
+
+    class FakeDataset:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def __getitem__(self, index: int) -> dict[str, object]:
+            tensor = SimpleNamespace(shape=(1, 2, 3))
+            return {"cc_image": tensor, "mlo_image": tensor}
+
+    monkeypatch.setattr(cli, "load_config", lambda _: config)
+    monkeypatch.setattr(cli, "set_global_seed", lambda _: None)
+    monkeypatch.setattr(cli, "build_train_manifest", lambda _: [object()])
+    monkeypatch.setattr(cli, "PairedBreastDataset", FakeDataset)
+
+    exit_code = cli.main(
+        ["train", "--config", str(Path("configs/smoke.yaml")), "--dry-run-loader"]
+    )
+
+    assert exit_code == 0
+    assert "fusion_head_variant=linear ignores fusion_hidden_dim=256" in capsys.readouterr().out

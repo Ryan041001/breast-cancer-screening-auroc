@@ -79,6 +79,7 @@ class TrainConfig:
     external_warmup_learning_rate: float = 1e-3
     external_warmup_max_samples: int | None = None
     external_sampler: str = "none"
+    fusion_eval_reference_run: str = "baseline"
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +260,12 @@ def load_config(config_path: str | Path) -> AppConfig:
         allowed = ", ".join(ALLOWED_EXTERNAL_SAMPLERS)
         raise ValueError(f"Config key 'external_sampler' must be one of: {allowed}")
 
+    fusion_eval_reference_run = str(
+        train_payload.get("fusion_eval_reference_run", "baseline")
+    ).strip()
+    if not fusion_eval_reference_run:
+        raise ValueError("Config key 'fusion_eval_reference_run' must be a non-empty string")
+
     learning_rate_raw = train_payload.get("learning_rate", 1e-3)
     if isinstance(learning_rate_raw, bool) or not isinstance(
         learning_rate_raw, (int, float)
@@ -430,5 +437,6 @@ def load_config(config_path: str | Path) -> AppConfig:
             external_warmup_learning_rate=external_warmup_learning_rate,
             external_warmup_max_samples=external_warmup_max_samples,
             external_sampler=external_sampler,
+            fusion_eval_reference_run=fusion_eval_reference_run,
         ),
     )

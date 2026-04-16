@@ -270,3 +270,112 @@ def test_run_cv_reports_startup_and_fold_progress(
     )
     assert "run-cv: manifests ready" in log_text
     assert "run-cv: complete mean_auc=0.750000" in log_text
+
+
+def test_run_cv_uses_configured_fusion_eval_reference_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    train_records = [
+        BreastManifestRecord(
+            breast_id="100_L",
+            cc_path=tmp_path / "100_L_CC.jpg",
+            mlo_path=tmp_path / "100_L_MLO.jpg",
+            label=0,
+        ),
+        BreastManifestRecord(
+            breast_id="101_R",
+            cc_path=tmp_path / "101_R_CC.jpg",
+            mlo_path=tmp_path / "101_R_MLO.jpg",
+            label=1,
+        ),
+    ]
+    test_records = [
+        BreastManifestRecord(
+            breast_id="T_001",
+            cc_path=tmp_path / "T_001_CC.jpg",
+            mlo_path=tmp_path / "T_001_MLO.jpg",
+            label=None,
+        )
+    ]
+    captured: dict[str, object] = {}
+    config = AppConfig(
+        experiment=ExperimentConfig(name="fusion-ref-test"),
+        paths=PathsConfig(
+            project_root=tmp_path,
+            train_csv=tmp_path / "train.csv",
+            train_images=tmp_path / "train_img",
+            test_images=tmp_path / "test_img",
+            submission_template=tmp_path / "submission.csv",
+            output_root=tmp_path / "outputs",
+        ),
+        runtime=RuntimeConfig(seed=42, device="cpu"),
+        train=TrainConfig(
+            folds=2,
+            batch_size=2,
+            image_size=16,
+            epochs=1,
+            num_workers=0,
+            fusion_eval_reference_run="blend_best12_plus_baselinev2normaug_refined",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.set_global_seed", lambda seed: None
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.build_train_manifest",
+        lambda path: train_records,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.build_test_manifest",
+        lambda submission_csv, test_images_dir: test_records,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.assign_deterministic_folds",
+        lambda manifest, num_folds, seed: {"100_L": 0, "101_R": 1},
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.PairedBreastModel",
+        lambda backbone_name, pretrained, fusion_head_config=None: SimpleNamespace(
+            backbone_name=backbone_name,
+            pretrained=pretrained,
+        ),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.maybe_prepare_external_warmup",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.fit_model",
+        lambda *args, **kwargs: (
+            SimpleNamespace(model="model"),
+            EvaluationResult(loss=0.1, auc=0.75, predictions={"100_L": 0.2}),
+        ),
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.build_prediction_loader",
+        lambda *args, **kwargs: ["loader"],
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.predict_probabilities",
+        lambda *args, **kwargs: {"T_001": 0.5},
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv.write_prediction_table",
+        lambda predictions, output_path: None,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv._write_fold_metrics",
+        lambda summary, output_dir: None,
+    )
+    monkeypatch.setattr(
+        "final_project.engine.run_cv._try_write_fusion_eval",
+        lambda run_dir, output_root, summary, labels, *, reference_run: captured.update(
+            {"reference_run": reference_run}
+        ),
+    )
+
+    _ = run_cross_validation(config)
+
+    assert captured["reference_run"] == "blend_best12_plus_baselinev2normaug_refined"

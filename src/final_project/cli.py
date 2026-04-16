@@ -146,6 +146,7 @@ def _run_train(args: CommandArgs) -> int:
     config = load_config(args.config)
     transform_profile = _get_transform_profile(config)
     fusion_head_config = FusionHeadConfig.from_train_config(config.train)
+    _warn_if_linear_fusion_ignores_fields(config)
     set_global_seed(config.runtime.seed)
     train_manifest = build_train_manifest(config.paths.train_csv)
     dataset = PairedBreastDataset(
@@ -315,6 +316,7 @@ def _run_cv(args: CommandArgs) -> int:
     if args.config is None:
         raise ValueError("run-cv requires --config")
     config = load_config(args.config)
+    _warn_if_linear_fusion_ignores_fields(config)
     artifacts = run_cross_validation(config)
     experiment_dir = (
         build_output_paths(config.paths.output_root).runs / config.experiment.name
@@ -469,3 +471,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_command(args)
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"error: {exc}\n")
+
+
+def _warn_if_linear_fusion_ignores_fields(config: object) -> None:
+    train_config = getattr(config, "train", None)
+    if getattr(train_config, "fusion_head_variant", "linear") != "linear":
+        return
+    ignored_fields: list[str] = []
+    if getattr(train_config, "fusion_hidden_dim", 512) != 512:
+        ignored_fields.append(
+            f"fusion_hidden_dim={getattr(train_config, 'fusion_hidden_dim')}"
+        )
+    if getattr(train_config, "fusion_dropout", 0.0) != 0.0:
+        ignored_fields.append(
+            f"fusion_dropout={getattr(train_config, 'fusion_dropout')}"
+        )
+    if getattr(train_config, "fusion_activation", "gelu") != "gelu":
+        ignored_fields.append(
+            f"fusion_activation={getattr(train_config, 'fusion_activation')}"
+        )
+    if getattr(train_config, "fusion_layer_norm", False):
+        ignored_fields.append("fusion_layer_norm=true")
+    if getattr(train_config, "fusion_residual", False):
+        ignored_fields.append("fusion_residual=true")
+    if not ignored_fields:
+        return
+    print(
+        "warning: fusion_head_variant=linear ignores "
+        + ", ".join(ignored_fields),
+        flush=True,
+    )

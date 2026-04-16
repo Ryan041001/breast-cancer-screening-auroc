@@ -55,6 +55,7 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.train.scheduler == "none"
     assert config.train.cache_mode == "preprocess"
     assert config.train.external_sampler == "none"
+    assert config.train.fusion_eval_reference_run == "baseline"
 
 
 def test_load_config_loads_default_linear_fusion_head_values() -> None:
@@ -297,6 +298,7 @@ def test_load_config_rejects_unknown_transform_profile(tmp_path: Path) -> None:
         ("scheduler", "cosine"),
         ("cache_mode", "preprocess"),
         ("external_sampler", "dataset_label_balanced"),
+        ("fusion_eval_reference_run", "blend_best12_plus_baselinev2normaug_refined"),
     ],
 )
 def test_load_config_accepts_supported_training_controls(
