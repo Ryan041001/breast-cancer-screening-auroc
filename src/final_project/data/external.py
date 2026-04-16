@@ -17,6 +17,7 @@ from .transforms import TransformProfile, build_image_transform
 POSITIVE_PATHOLOGIES = frozenset({"malignant"})
 NEGATIVE_PATHOLOGIES = frozenset({"benign", "normal"})
 FALLBACK_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+EXTERNAL_DATA_CONTRACT_VERSION = "external_single_image_clean_v1"
 
 
 @dataclass(frozen=True, slots=True)

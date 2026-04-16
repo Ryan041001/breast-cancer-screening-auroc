@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 from typing import TypedDict
 
 import torch
@@ -16,6 +16,7 @@ from tqdm.auto import tqdm
 
 from ..config import AppConfig
 from ..data.external import (
+    EXTERNAL_DATA_CONTRACT_VERSION,
     ExternalImageDataset,
     ExternalImageRecord,
     load_external_split_records,
@@ -42,6 +43,10 @@ class ExternalWarmupArtifacts:
 class ExternalWarmupResult:
     loss: float
     auc: float
+
+
+SHARED_WARMUP_DIRNAME = "_shared_external_warmup"
+SHARED_WARMUP_REFERENCE_FILENAME = "shared_warmup.json"
 
 
 class ExternalWarmupModel(nn.Module):
@@ -233,20 +238,98 @@ def maybe_prepare_external_warmup(
             image_size=image_size,
             transform_profile=transform_profile,
         )
-        saved_metadata = checkpoint.get("warmup_metadata")
-        if isinstance(saved_metadata, dict) and saved_metadata == expected_metadata:
-            log_message(output_dir, f"warmup-external: reusing checkpoint={checkpoint_path}")
-            return checkpoint_path
+        shared_output_dir = _resolve_shared_warmup_output_dir(
+            output_dir,
+            metadata_hash=str(expected_metadata["metadata_hash"]),
+        )
+        shared_checkpoint_path = shared_output_dir / "checkpoints" / "best.pt"
+        if _checkpoint_matches_metadata(shared_checkpoint_path, expected_metadata):
+            _record_shared_warmup_reference(
+                output_dir=output_dir,
+                shared_output_dir=shared_output_dir,
+                checkpoint_path=shared_checkpoint_path,
+                metadata=expected_metadata,
+            )
+            log_message(
+                output_dir,
+                f"warmup-external: reusing shared checkpoint={shared_checkpoint_path}",
+            )
+            return shared_checkpoint_path
+        if _checkpoint_matches_metadata(checkpoint_path, expected_metadata):
+            _promote_warmup_artifacts(source_dir=output_dir, target_dir=shared_output_dir)
+            _record_shared_warmup_reference(
+                output_dir=output_dir,
+                shared_output_dir=shared_output_dir,
+                checkpoint_path=shared_checkpoint_path,
+                metadata=expected_metadata,
+            )
+            log_message(
+                output_dir,
+                f"warmup-external: promoted local checkpoint to shared cache={shared_checkpoint_path}",
+            )
+            return shared_checkpoint_path
+        existing_dir = _find_matching_existing_warmup_dir(
+            output_dir=output_dir,
+            metadata=expected_metadata,
+        )
+        if existing_dir is not None:
+            _promote_warmup_artifacts(source_dir=existing_dir, target_dir=shared_output_dir)
+            _record_shared_warmup_reference(
+                output_dir=output_dir,
+                shared_output_dir=shared_output_dir,
+                checkpoint_path=shared_checkpoint_path,
+                metadata=expected_metadata,
+            )
+            log_message(
+                output_dir,
+                f"warmup-external: reusing existing checkpoint from={existing_dir}",
+            )
+            return shared_checkpoint_path
         log_message(
             output_dir,
             "warmup-external: checkpoint metadata mismatch, rebuilding warmup checkpoint",
         )
+    else:
+        expected_metadata = build_external_warmup_metadata(
+            config=config,
+            backbone_name=backbone_name,
+            image_size=image_size,
+            transform_profile=transform_profile,
+        )
+        shared_output_dir = _resolve_shared_warmup_output_dir(
+            output_dir,
+            metadata_hash=str(expected_metadata["metadata_hash"]),
+        )
+        shared_checkpoint_path = shared_output_dir / "checkpoints" / "best.pt"
+        existing_dir = _find_matching_existing_warmup_dir(
+            output_dir=output_dir,
+            metadata=expected_metadata,
+        )
+        if existing_dir is not None:
+            _promote_warmup_artifacts(source_dir=existing_dir, target_dir=shared_output_dir)
+            _record_shared_warmup_reference(
+                output_dir=output_dir,
+                shared_output_dir=shared_output_dir,
+                checkpoint_path=shared_checkpoint_path,
+                metadata=expected_metadata,
+            )
+            log_message(
+                output_dir,
+                f"warmup-external: reusing existing checkpoint from={existing_dir}",
+            )
+            return shared_checkpoint_path
     artifacts = run_external_warmup(
         config,
         backbone_name=backbone_name,
-        output_dir=output_dir,
+        output_dir=shared_output_dir,
         image_size=image_size,
         transform_profile=transform_profile,
+    )
+    _record_shared_warmup_reference(
+        output_dir=output_dir,
+        shared_output_dir=shared_output_dir,
+        checkpoint_path=artifacts.checkpoint_path,
+        metadata=expected_metadata,
     )
     return artifacts.checkpoint_path
 
@@ -329,7 +412,7 @@ def evaluate_external_model(
             desc="warmup-eval",
             leave=False,
             dynamic_ncols=True,
-            disable=not sys.stderr.isatty(),
+            disable=False,
         )
         for batch in progress:
             labels = batch["label"].to(device, non_blocking=use_cuda)
@@ -370,7 +453,7 @@ def _train_one_epoch(
         desc="warmup-train",
         leave=False,
         dynamic_ncols=True,
-        disable=not sys.stderr.isatty(),
+        disable=False,
     )
     for batch in progress:
         labels = batch["label"].to(device, non_blocking=use_cuda)
@@ -436,6 +519,8 @@ def build_external_warmup_metadata(
         "backbone_name": backbone_name,
         "image_size": image_size,
         "transform_profile": transform_profile,
+        "data_contract_version": EXTERNAL_DATA_CONTRACT_VERSION,
+        "data_signature": _build_external_data_signature(config),
         "external_warmup_epochs": config.train.external_warmup_epochs,
         "external_warmup_batch_size": config.train.external_warmup_batch_size,
         "external_warmup_num_workers": config.train.external_warmup_num_workers,
@@ -447,3 +532,111 @@ def build_external_warmup_metadata(
         json.dumps(payload, sort_keys=True).encode("utf-8")
     ).hexdigest()
     return payload
+
+
+def _build_external_data_signature(config: AppConfig) -> str:
+    path_items: list[dict[str, object]] = []
+    paths_obj = getattr(config, "paths", None)
+    catalog = getattr(paths_obj, "external_catalog", None)
+    splits_dir = getattr(paths_obj, "external_splits_dir", None)
+    for raw_path in (
+        catalog,
+        Path(splits_dir) / "train.csv" if splits_dir is not None else None,
+        Path(splits_dir) / "val.csv" if splits_dir is not None else None,
+        Path(splits_dir) / "test.csv" if splits_dir is not None else None,
+    ):
+        if raw_path is None:
+            continue
+        path = Path(raw_path)
+        item: dict[str, object] = {
+            "path": str(path),
+            "exists": path.exists(),
+        }
+        if path.is_file():
+            item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            item["size"] = path.stat().st_size
+        path_items.append(item)
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "contract_version": EXTERNAL_DATA_CONTRACT_VERSION,
+                "files": path_items,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _resolve_shared_warmup_output_dir(output_dir: Path, *, metadata_hash: str) -> Path:
+    return output_dir.parent.parent / SHARED_WARMUP_DIRNAME / metadata_hash
+
+
+def _checkpoint_matches_metadata(
+    checkpoint_path: Path,
+    expected_metadata: dict[str, object],
+) -> bool:
+    if not checkpoint_path.exists():
+        return False
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    saved_metadata = checkpoint.get("warmup_metadata")
+    return isinstance(saved_metadata, dict) and saved_metadata == expected_metadata
+
+
+def _record_shared_warmup_reference(
+    *,
+    output_dir: Path,
+    shared_output_dir: Path,
+    checkpoint_path: Path,
+    metadata: dict[str, object],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    reference_path = output_dir / SHARED_WARMUP_REFERENCE_FILENAME
+    reference_payload = {
+        "shared_output_dir": str(shared_output_dir.resolve()),
+        "checkpoint_path": str(checkpoint_path.resolve()),
+        "metadata_hash": metadata["metadata_hash"],
+    }
+    reference_path.write_text(json.dumps(reference_payload, indent=2), encoding="utf-8")
+    shared_metrics = shared_output_dir / "metrics.json"
+    if shared_metrics.exists():
+        shutil.copy2(shared_metrics, output_dir / "metrics.json")
+
+
+def _promote_warmup_artifacts(*, source_dir: Path, target_dir: Path) -> None:
+    if source_dir.resolve() == target_dir.resolve():
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for relative_path in (
+        Path("checkpoints") / "best.pt",
+        Path("metrics.json"),
+        Path("run.log"),
+    ):
+        source_path = source_dir / relative_path
+        if not source_path.exists():
+            continue
+        destination_path = target_dir / relative_path
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination_path)
+
+
+def _find_matching_existing_warmup_dir(
+    *,
+    output_dir: Path,
+    metadata: dict[str, object],
+) -> Path | None:
+    runs_root = output_dir.parent.parent
+    shared_root = runs_root / SHARED_WARMUP_DIRNAME
+    candidate_paths = list(runs_root.glob("*/external_warmup/checkpoints/best.pt"))
+    candidate_paths.extend(shared_root.glob("*/checkpoints/best.pt"))
+    for checkpoint_path in candidate_paths:
+        candidate_dir = checkpoint_path.parent.parent
+        if candidate_dir == output_dir:
+            continue
+        if _checkpoint_matches_metadata(checkpoint_path, metadata):
+            if candidate_dir.resolve() == _resolve_shared_warmup_output_dir(
+                output_dir,
+                metadata_hash=str(metadata["metadata_hash"]),
+            ).resolve():
+                return candidate_dir
+            return candidate_dir
+    return None

@@ -1,23 +1,36 @@
 # Mammography Final Project
 
-基于双视图乳腺 X 光图像的恶性概率预测项目。当前实现以课程数据的 `train.csv` / `train_img` / `test_img` 为主任务，支持：
+基于双视图乳腺 X 光图像的恶性概率预测项目。当前仓库的主任务是 internal breast-level paired classification，external `MammoNet32k_new` 只作为 single-image warm-up 数据源使用。
 
-- breast-level manifest 构建
-- patient-safe cross validation
-- paired `CC` / `MLO` 共享 backbone + fusion head
-- OOF / test 预测与提交文件生成
-- 基于 `MammoNet32k_new` 的外部单视图 warmup，再回到课程 paired-view 任务微调
+## 当前主线
+
+当前不要把 `baseline_mammonet32k_mainline_v1` 当成新主线继续推。
+
+现阶段固定结论：
+
+- 第一单模：`baseline_mammonet32k_warmup_e4_lr5e4`
+- 第一 blend：`baseline 0.2 + baseline_mammonet32k_warmup_e4_lr5e4 0.8`
+
+当前最重要的下一步不是换 backbone，而是对冠军线做 paired finetune 控制项的拆解式移植和筛选。
+
+详细执行方向见 [docs/NEXT_STEPS_GUIDE.md](docs/NEXT_STEPS_GUIDE.md)。
 
 ## Project Layout
 
 ```text
 Final_Project/
 ├─ configs/
-├─ docs/superpowers/
+├─ docs/
+│  ├─ NEXT_STEPS_GUIDE.md
+│  └─ superpowers/
+│     ├─ plans/
+│     └─ specs/
 ├─ MammoNet32k_new/
 ├─ outputs/
+│  ├─ research/
 │  ├─ runs/
 │  └─ submissions/
+├─ scripts/
 ├─ src/final_project/
 │  ├─ data/
 │  ├─ engine/
@@ -29,13 +42,13 @@ Final_Project/
 
 ## Environment
 
-使用 `uv` 管理环境：
+安装依赖：
 
 ```bash
 uv sync --extra train --group dev
 ```
 
-确认 GPU：
+检查 GPU：
 
 ```bash
 uv run python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
@@ -61,7 +74,7 @@ uv run python main.py train --config configs/smoke.yaml --dry-run-loader
 uv run python main.py train --config configs/smoke.yaml --dry-run-model
 ```
 
-外部数据 warmup：
+external warm-up：
 
 ```bash
 uv run python main.py warmup-external --config configs/smoke_mammonet32k_warmup.yaml
@@ -69,85 +82,93 @@ uv run python main.py train --config configs/smoke_mammonet32k_warmup.yaml
 uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup.yaml
 ```
 
-## Configs
+数据审计与辅助集生成：
 
-- `configs/smoke.yaml`: 基础 smoke 流程
-- `configs/baseline.yaml`: 课程数据 baseline
-- `configs/smoke_mammonet32k_warmup.yaml`: 128 张外部图像 warmup + 课程数据 smoke
-- `configs/baseline_mammonet32k_warmup.yaml`: 课程数据 baseline，前置 2 epoch MammoNet32k warmup
-- `configs/baseline_mammonet32k_warmup_normaug.yaml`: warmup + `normaug` 版本，用于下一轮对比
+```bash
+uv run python scripts/external_audit.py
+uv run python scripts/build_external_paired_highconf.py
+```
 
-外部 warmup 相关字段都放在 `train` 下：
+## Modeling Contract
 
-- `external_warmup_epochs`
-- `external_warmup_batch_size`
-- `external_warmup_num_workers`
-- `external_warmup_learning_rate`
-- `external_warmup_max_samples`
+### Internal paired task
 
-数据路径相关字段：
+- 每个 `breast_id` 必须恰好对应一对 `CC + MLO`
+- 标签规则：同一乳房任一视图 `pathology == 'M'` 记为 `1`，否则为 `0`
+- 切分规则：patient-safe folds，同一病人的左右乳房不会跨 fold
+- 预处理：裁剪黑边，并将右乳规范到统一朝向
 
-- `paths.external_data_root`
-- `paths.external_catalog`
-- `paths.external_splits_dir`
+### External warm-up
 
-只提供 `external_data_root` 时，会自动解析 `catalog.csv` 和 `splits/`。
+- `MammoNet32k_new` 仅用于 single-image warm-up
+- `malignant -> 1`
+- `benign / normal -> 0`
+- `unknown pathology` 直接过滤
+- `unknown laterality / unknown view` 不做补全
+
+## Warm-up Reuse
+
+当前已支持 shared warm-up 复用。不同 config 只要 warm-up 数据 contract、数据签名、seed 和 warm-up 超参一致，就会复用同一份 warm-up。
+
+共享目录：
+
+- `outputs/runs/_shared_external_warmup/<metadata_hash>/`
+
+已验证的 clean-v1 shared warm-up：
+
+- metadata hash:
+  `7159fb51f1f5fd90896bc62b8a70745cc59d5491c7e6301aa4edf0a5190e5eb3`
+
+注意：
+
+- 旧的无 metadata warm-up checkpoint 会被保留
+- 但不会自动当成当前 clean contract 的可复用缓存
+- `transform_profile` 目前同时影响 warm-up 和 paired；`normonly` 会形成新的 warm-up family
 
 ## Outputs
 
-- `outputs/runs/<experiment>/external_warmup/checkpoints/best.pt`: 外部 warmup backbone checkpoint
-- `outputs/runs/<experiment>/external_warmup/run.log`: 外部 warmup 过程日志
-- `outputs/runs/<experiment>/full_train/checkpoints/best.pt`: 全量训练 checkpoint
-- `outputs/runs/<experiment>/full_train/run.log`: 全量训练过程日志
-- `outputs/runs/<experiment>/cv/oof_predictions.csv`: OOF 预测
-- `outputs/runs/<experiment>/cv/test_predictions.csv`: CV 平均后的测试集预测
-- `outputs/runs/<experiment>/cv/run.log`: CV 过程日志
-- `outputs/runs/<experiment>/test_predictions.csv`: 当前实验主测试预测
-- `outputs/runs/tune_iter_<report_name>_best_blend/`: 调优迭代自动备份的最佳 blend 预测
-- `outputs/submissions/<experiment>_submission.csv`: 提交文件
-- `outputs/research/<report_name>/leaderboard.json|csv|md`: 调优迭代汇总排行榜
+- `outputs/runs/<experiment>/external_warmup/checkpoints/best.pt`
+- `outputs/runs/<experiment>/external_warmup/run.log`
+- `outputs/runs/<experiment>/full_train/checkpoints/best.pt`
+- `outputs/runs/<experiment>/full_train/run.log`
+- `outputs/runs/<experiment>/cv/oof_predictions.csv`
+- `outputs/runs/<experiment>/cv/test_predictions.csv`
+- `outputs/runs/<experiment>/cv/run.log`
+- `outputs/runs/<experiment>/cv/metrics.json`
+- `outputs/runs/<experiment>/cv/fusion_eval.json`
+- `outputs/research/<report_name>/leaderboard.json`
+- `outputs/research/<report_name>/leaderboard.csv`
+- `outputs/research/<report_name>/leaderboard.md`
+- `outputs/submissions/<experiment>_submission.csv`
 
-## Current Modeling Contract
+## Tuning Priority
 
-- 每个 `breast_id` 对应一对 `CC` / `MLO`
-- 标签规则：同一乳房任一行 `pathology == 'M'` 即记为 1，否则为 0
-- 切分规则：patient-safe folds，同一病人的左右乳房不会跨 fold
-- 预处理：裁掉黑边，并将右乳统一翻转到同一朝向
-- 外部 warmup：将 `MammoNet32k_new` 中有标签的单张图像映射为恶性/非恶性二分类，先训练 backbone，再加载到 paired model
+当前推荐顺序：
 
-## Tuning Order
+1. 固定冠军生产线与冠军 blend
+2. 做 paired finetune 控制项的 `3-fold` quick screen
+3. 只把 quick screen 前 1 名升到 `5-fold`
+4. paired retune 收敛后，再做轻量 fusion head
+5. external paired high-confidence 子集只作为 train-only auxiliary 试验
 
-建议按这个顺序继续迭代：
-
-1. `baseline.yaml`
-2. `baseline_mammonet32k_warmup.yaml`
-3. `baseline_mammonet32k_warmup_normaug.yaml`
-4. `baseline_fusion_mlp_gelu_d0.yaml`
-5. `baseline_fusion_mlp_gelu_d10.yaml`
-6. 对最佳候选做 seed / epoch retest
-
-优先看：
-
-- `cv/metrics.json` 的 `mean_auc`
-- `cv/fusion_eval.json` 的 blend gain
-- OOF 与 baseline 的互补性，而不是只看单次 fold 波动
+不要直接把 external 数据升格成新的 paired 主训练集。
 
 ## External Libraries / Models / Data Attribution
 
 ### Libraries
 
-- `torch` / `torchvision`: 训练、推理、数据加载和图像变换
+- `torch` / `torchvision`: 训练、推理、数据加载与图像变换
 - `timm`: backbone 构建与 ImageNet 预训练权重加载
 - `scikit-learn`: AUROC 计算
 - `Pillow`: 图像读取与基础预处理
 - `PyYAML`: 配置加载
-- `numpy` / `pandas` / `tqdm`: 实验辅助
+- `numpy` / `pandas` / `tqdm`: 实验与数据处理辅助
 
-### Pretrained Models / Weights
+### Pretrained models / weights
 
-- `timm` pretrained backbones: 当前默认通过 `timm.create_model(...)` 使用 ImageNet 预训练权重初始化视觉骨干
+- `timm` pretrained backbones: 当前默认通过 `timm.create_model(...)` 使用 ImageNet 预训练权重初始化视觉 backbone
 
-### Data Sources
+### Data sources
 
-- 课程数据 `train.csv` / `train_img` / `test_img` / `name_sid_submission.csv`: 最终提交目标数据
-- `MammoNet32k_new`: 外部公开乳腺影像数据，用于 backbone warmup，提升课程任务的初始化质量
+- 课程数据：`train.csv` / `train_img` / `test_img` / `name_sid_submission.csv`
+- `MammoNet32k_new`：external public mammography dataset，用于 backbone warm-up，不直接替代主任务 paired 训练集

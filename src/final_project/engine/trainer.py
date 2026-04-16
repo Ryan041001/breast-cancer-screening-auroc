@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-import sys
 from typing import TypedDict, cast
 
 import torch
@@ -416,7 +415,7 @@ def evaluate_model(
             desc="eval",
             leave=False,
             dynamic_ncols=True,
-            disable=not sys.stderr.isatty(),
+            disable=False,
         )
         for batch in progress:
             labels = batch["label"].to(device, non_blocking=use_cuda)
@@ -469,7 +468,7 @@ def _train_one_epoch(
         desc="train",
         leave=False,
         dynamic_ncols=True,
-        disable=not sys.stderr.isatty(),
+        disable=False,
     )
     optimizer.zero_grad(set_to_none=True)
     for batch_index, batch in enumerate(progress, start=1):
