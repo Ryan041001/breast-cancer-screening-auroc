@@ -1,0 +1,47 @@
+experiment:
+  name: baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_xfuse_t2_h256_hd4_splitv2
+
+paths:
+  project_root: ..
+  train_csv: train.csv
+  train_images: train_img
+  test_images: test_img
+  submission_template: name_sid_submission.csv
+  output_root: outputs
+  external_data_root: MammoNet32k_new/MammoNet32k_new
+
+runtime:
+  seed: 42
+  device: cuda
+  fold_seed: 42
+  train_seed: 42
+  warmup_seed: 42
+
+train:
+  folds: 5
+  batch_size: 16
+  image_size: 384
+  epochs: 6
+  num_workers: 4
+  transform_profile: baseline
+  fusion_head_variant: transformer
+  fusion_hidden_dim: 256
+  fusion_dropout: 0.1
+  fusion_activation: gelu
+  fusion_layer_norm: true
+  fusion_residual: false
+  fusion_transformer_layers: 2
+  fusion_transformer_heads: 4
+  learning_rate: 0.0005
+  weight_decay: 0.01
+  scheduler: cosine
+  min_lr: 0.000001
+  freeze_backbone_epochs: 1
+  grad_accum_steps: 1
+  cache_mode: preprocess
+  external_warmup_epochs: 4
+  external_warmup_batch_size: 32
+  external_warmup_num_workers: 4
+  external_warmup_learning_rate: 0.0005
+  external_sampler: none
+  fusion_eval_reference_run: baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2

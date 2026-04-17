@@ -19,6 +19,8 @@ class FusionHeadConfig:
     activation: str = "gelu"
     layer_norm: bool = False
     residual: bool = False
+    transformer_layers: int = 2
+    transformer_heads: int = 4
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -32,6 +34,8 @@ class FusionHeadConfig:
             activation=str(data.get("activation", "gelu")),
             layer_norm=bool(data.get("layer_norm", False)),
             residual=bool(data.get("residual", False)),
+            transformer_layers=int(data.get("transformer_layers", 2)),
+            transformer_heads=int(data.get("transformer_heads", 4)),
         )
 
     @classmethod
@@ -44,6 +48,8 @@ class FusionHeadConfig:
             activation=getattr(train_config, "fusion_activation", "gelu"),
             layer_norm=getattr(train_config, "fusion_layer_norm", False),
             residual=getattr(train_config, "fusion_residual", False),
+            transformer_layers=getattr(train_config, "fusion_transformer_layers", 2),
+            transformer_heads=getattr(train_config, "fusion_transformer_heads", 4),
         )
 
     @classmethod
@@ -125,6 +131,59 @@ class MLPFusionHead(nn.Module):
         return self.output(hidden).squeeze(1)
 
 
+class TransformerFusionHead(nn.Module):
+    """Tiny transformer over four cross-view feature tokens."""
+
+    def __init__(
+        self,
+        feature_dim: int,
+        hidden_dim: int = 256,
+        dropout: float = 0.1,
+        activation: str = "gelu",
+        layer_norm: bool = True,
+        transformer_layers: int = 2,
+        transformer_heads: int = 4,
+    ) -> None:
+        super().__init__()
+        self.token_proj = nn.Linear(feature_dim, hidden_dim)
+        self.input_norm = nn.LayerNorm(hidden_dim) if layer_norm else nn.Identity()
+        self.token_type_embedding = nn.Parameter(torch.zeros(4, hidden_dim))
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=transformer_heads,
+            dim_feedforward=hidden_dim * 2,
+            dropout=dropout,
+            activation=activation,
+            batch_first=True,
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=transformer_layers,
+        )
+        self.output_norm = nn.LayerNorm(hidden_dim)
+        self.output = nn.Linear(hidden_dim, 1)
+
+    def forward(
+        self, cc_features: torch.Tensor, mlo_features: torch.Tensor
+    ) -> torch.Tensor:
+        tokens = torch.stack(
+            [
+                cc_features,
+                mlo_features,
+                torch.abs(cc_features - mlo_features),
+                cc_features * mlo_features,
+            ],
+            dim=1,
+        )
+        hidden = self.token_proj(tokens)
+        hidden = self.input_norm(hidden)
+        hidden = hidden + self.token_type_embedding.unsqueeze(0)
+        hidden = self.encoder(hidden)
+        pooled = self.output_norm(hidden.mean(dim=1))
+        return self.output(pooled).squeeze(1)
+
+
 def build_fusion_head(
     feature_dim: int,
     config: FusionHeadConfig | None = None,
@@ -140,6 +199,16 @@ def build_fusion_head(
             activation=config.activation,
             layer_norm=config.layer_norm,
             residual=config.residual,
+        )
+    if config.variant == "transformer":
+        return TransformerFusionHead(
+            feature_dim=feature_dim,
+            hidden_dim=config.hidden_dim,
+            dropout=config.dropout,
+            activation=config.activation,
+            layer_norm=config.layer_norm,
+            transformer_layers=config.transformer_layers,
+            transformer_heads=config.transformer_heads,
         )
     return LinearFusionHead(feature_dim=feature_dim)
 

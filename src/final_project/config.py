@@ -21,7 +21,7 @@ REQUIRED_PATH_KEYS = (
 REQUIRED_RUNTIME_KEYS = ("seed", "device")
 REQUIRED_TRAIN_KEYS = ("folds", "batch_size", "image_size", "epochs", "num_workers")
 ALLOWED_TRANSFORM_PROFILES = ("baseline", "normaug", "normonly")
-ALLOWED_FUSION_HEAD_VARIANTS = ("linear", "mlp")
+ALLOWED_FUSION_HEAD_VARIANTS = ("linear", "mlp", "transformer")
 ALLOWED_FUSION_ACTIVATIONS = ("gelu", "relu")
 ALLOWED_SCHEDULERS = ("none", "cosine")
 ALLOWED_CACHE_MODES = ("none", "preprocess")
@@ -69,6 +69,8 @@ class TrainConfig:
     fusion_activation: str = "gelu"
     fusion_layer_norm: bool = False
     fusion_residual: bool = False
+    fusion_transformer_layers: int = 2
+    fusion_transformer_heads: int = 4
     learning_rate: float = 1e-3
     weight_decay: float = 1e-2
     scheduler: str = "none"
@@ -259,6 +261,31 @@ def load_config(config_path: str | Path) -> AppConfig:
 
     fusion_layer_norm = bool(train_payload.get("fusion_layer_norm", False))
     fusion_residual = bool(train_payload.get("fusion_residual", False))
+    fusion_transformer_layers = _require_int_at_least(
+        {
+            "fusion_transformer_layers": train_payload.get(
+                "fusion_transformer_layers", 2
+            )
+        },
+        "fusion_transformer_layers",
+        1,
+    )
+    fusion_transformer_heads = _require_int_at_least(
+        {
+            "fusion_transformer_heads": train_payload.get(
+                "fusion_transformer_heads", 4
+            )
+        },
+        "fusion_transformer_heads",
+        1,
+    )
+    if fusion_head_variant == "transformer" and (
+        fusion_hidden_dim % fusion_transformer_heads != 0
+    ):
+        raise ValueError(
+            "Config key 'fusion_hidden_dim' must be divisible by "
+            "'fusion_transformer_heads' for transformer fusion"
+        )
     scheduler = str(train_payload.get("scheduler", "none"))
     if scheduler not in ALLOWED_SCHEDULERS:
         allowed = ", ".join(ALLOWED_SCHEDULERS)
@@ -441,6 +468,8 @@ def load_config(config_path: str | Path) -> AppConfig:
             fusion_activation=fusion_activation,
             fusion_layer_norm=fusion_layer_norm,
             fusion_residual=fusion_residual,
+            fusion_transformer_layers=fusion_transformer_layers,
+            fusion_transformer_heads=fusion_transformer_heads,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             scheduler=scheduler,

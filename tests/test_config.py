@@ -163,7 +163,7 @@ def test_load_config_resolves_project_root_from_sibling_worktree(
     assert config.paths.train_csv == repo_root / "train.csv"
 
 
-@pytest.mark.parametrize("fusion_head_variant", ["linear", "mlp"])
+@pytest.mark.parametrize("fusion_head_variant", ["linear", "mlp", "transformer"])
 def test_load_config_accepts_supported_fusion_head_variants(
     tmp_path: Path,
     fusion_head_variant: str,
@@ -181,12 +181,33 @@ def test_load_config_accepts_supported_fusion_head_variants(
     assert config.train.fusion_head_variant == fusion_head_variant
 
 
+def test_load_config_accepts_transformer_fusion_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "transformer.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        "fusion_head_variant": "transformer",
+        "fusion_hidden_dim": 256,
+        "fusion_dropout": 0.1,
+        "fusion_layer_norm": True,
+        "fusion_transformer_layers": 2,
+        "fusion_transformer_heads": 4,
+    }
+    _write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.train.fusion_head_variant == "transformer"
+    assert config.train.fusion_transformer_layers == 2
+    assert config.train.fusion_transformer_heads == 4
+
+
 def test_load_config_rejects_unknown_fusion_head_variant(tmp_path: Path) -> None:
     bad_config = tmp_path / "bad.yaml"
     payload = _base_payload()
     payload["train"] = {
         **payload["train"],
-        "fusion_head_variant": "transformer",
+        "fusion_head_variant": "transformer_x",
     }
     _write_config(bad_config, payload)
 
@@ -201,6 +222,8 @@ def test_load_config_rejects_unknown_fusion_head_variant(tmp_path: Path) -> None
         ("fusion_hidden_dim", -1, "fusion_hidden_dim"),
         ("fusion_dropout", -0.1, "fusion_dropout"),
         ("fusion_dropout", 1.1, "fusion_dropout"),
+        ("fusion_transformer_layers", 0, "fusion_transformer_layers"),
+        ("fusion_transformer_heads", 0, "fusion_transformer_heads"),
         ("external_warmup_batch_size", 0, "external_warmup_batch_size"),
         ("external_warmup_num_workers", -1, "external_warmup_num_workers"),
         ("external_warmup_learning_rate", 0.0, "external_warmup_learning_rate"),
@@ -227,6 +250,23 @@ def test_load_config_rejects_invalid_fusion_head_numeric_values(
     _write_config(bad_config, payload)
 
     with pytest.raises(ValueError, match=match):
+        _ = load_config(bad_config)
+
+
+def test_load_config_rejects_transformer_head_with_non_divisible_hidden_dim(
+    tmp_path: Path,
+) -> None:
+    bad_config = tmp_path / "bad_transformer.yaml"
+    payload = _base_payload()
+    payload["train"] = {
+        **payload["train"],
+        "fusion_head_variant": "transformer",
+        "fusion_hidden_dim": 250,
+        "fusion_transformer_heads": 4,
+    }
+    _write_config(bad_config, payload)
+
+    with pytest.raises(ValueError, match="fusion_hidden_dim"):
         _ = load_config(bad_config)
 
 

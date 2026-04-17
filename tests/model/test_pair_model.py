@@ -2,13 +2,35 @@ from __future__ import annotations
 
 import torch
 
-from final_project.model.fusion import PairedBreastModel
+from final_project.model.fusion import FusionHeadConfig, PairedBreastModel
 from final_project.model.losses import build_binary_loss
 from final_project.model.metrics import binary_auroc
 
 
 def test_pair_model_returns_one_logit_per_breast() -> None:
     model = PairedBreastModel(backbone_name="resnet18", pretrained=False)
+    cc_images = torch.randn(2, 3, 64, 64)
+    mlo_images = torch.randn(2, 3, 64, 64)
+
+    logits = model(cc_images, mlo_images)
+
+    assert tuple(logits.shape) == (2,)
+
+
+def test_pair_model_supports_transformer_fusion_head() -> None:
+    model = PairedBreastModel(
+        backbone_name="resnet18",
+        pretrained=False,
+        fusion_head_config=FusionHeadConfig(
+            variant="transformer",
+            hidden_dim=256,
+            dropout=0.1,
+            activation="gelu",
+            layer_norm=True,
+            transformer_layers=2,
+            transformer_heads=4,
+        ),
+    )
     cc_images = torch.randn(2, 3, 64, 64)
     mlo_images = torch.randn(2, 3, 64, 64)
 
