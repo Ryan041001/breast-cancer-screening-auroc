@@ -20,11 +20,7 @@ from ..model.fusion import FusionHeadConfig, PairedBreastModel
 from ..utils.paths import build_output_paths
 from ..utils.repro import set_global_seed
 from ..utils.logging import log_message
-from .predict import (
-    DEFAULT_BACKBONE_NAME,
-    build_prediction_loader,
-    predict_probabilities,
-)
+from .predict import build_prediction_loader, predict_probabilities
 from .submission import read_prediction_table_strict, write_prediction_table
 from .trainer import EvaluationResult, fit_model
 from .fusion_eval import evaluate_fusion_candidate
@@ -87,6 +83,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         train_manifest,
         num_folds=config.train.folds,
         seed=fold_seed,
+        group_by=config.train.split_grouping,
     )
     _write_fold_audit(
         train_manifest=train_manifest,
@@ -94,12 +91,13 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         num_folds=config.train.folds,
         output_dir=run_dir,
         fold_seed=fold_seed,
+        split_grouping=config.train.split_grouping,
     )
     transform_profile = cast(TransformProfile, config.train.transform_profile)
     _log_ignored_linear_fusion_settings(run_dir, config)
     warmup_checkpoint = maybe_prepare_external_warmup(
         config,
-        backbone_name=DEFAULT_BACKBONE_NAME,
+        backbone_name=config.train.backbone_name,
         output_dir=output_paths.runs / config.experiment.name / "external_warmup",
         image_size=config.train.image_size,
         transform_profile=transform_profile,
@@ -125,7 +123,7 @@ def run_cross_validation(config: AppConfig) -> CVRunArtifacts:
         )
         fold_dir = run_dir / f"fold_{fold}"
         model = PairedBreastModel(
-            backbone_name=DEFAULT_BACKBONE_NAME,
+            backbone_name=config.train.backbone_name,
             pretrained=True,
             fusion_head_config=fusion_head_config,
         )
@@ -251,9 +249,11 @@ def _write_fold_audit(
     num_folds: int,
     output_dir: Path,
     fold_seed: int,
+    split_grouping: str,
 ) -> None:
     audit = build_fold_audit(train_manifest, assignments, num_folds)
     audit["fold_seed"] = fold_seed
+    audit["split_grouping"] = split_grouping
     (output_dir / "fold_audit.json").write_text(
         json.dumps(audit, indent=2),
         encoding="utf-8",

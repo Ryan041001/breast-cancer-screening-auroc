@@ -130,7 +130,7 @@ def _run_warmup_external(args: CommandArgs) -> int:
     output_dir = output_paths.runs / config.experiment.name / "external_warmup"
     checkpoint_path = maybe_prepare_external_warmup(
         config,
-        backbone_name=DEFAULT_BACKBONE_NAME,
+        backbone_name=config.train.backbone_name,
         output_dir=output_dir,
         image_size=config.train.image_size,
         transform_profile=transform_profile,
@@ -173,7 +173,7 @@ def _run_train(args: CommandArgs) -> int:
         model_module = import_module("final_project.model.fusion")
         model_class = getattr(model_module, "PairedBreastModel")
         model = model_class(
-            backbone_name=DEFAULT_BACKBONE_NAME,
+            backbone_name=config.train.backbone_name,
             pretrained=False,
             fusion_head_config=fusion_head_config,
         )
@@ -189,13 +189,13 @@ def _run_train(args: CommandArgs) -> int:
     model_module = import_module("final_project.model.fusion")
     model_class = getattr(model_module, "PairedBreastModel")
     model = model_class(
-        backbone_name=DEFAULT_BACKBONE_NAME,
+        backbone_name=config.train.backbone_name,
         pretrained=True,
         fusion_head_config=fusion_head_config,
     )
     warmup_checkpoint = maybe_prepare_external_warmup(
         config,
-        backbone_name=DEFAULT_BACKBONE_NAME,
+        backbone_name=config.train.backbone_name,
         output_dir=output_paths.runs / config.experiment.name / "external_warmup",
         image_size=config.train.image_size,
         transform_profile=transform_profile,
@@ -259,7 +259,7 @@ def _run_predict(args: CommandArgs) -> int:
             model = load_model_from_checkpoint(
                 checkpoint_path,
                 device=config.runtime.device,
-                backbone_name=DEFAULT_BACKBONE_NAME,
+                backbone_name=config.train.backbone_name,
             )
             prediction_sets.append(
                 predict_probabilities(
@@ -285,7 +285,7 @@ def _run_predict(args: CommandArgs) -> int:
         model = load_model_from_checkpoint(
             checkpoint_path,
             device=config.runtime.device,
-            backbone_name=DEFAULT_BACKBONE_NAME,
+            backbone_name=config.train.backbone_name,
         )
         predictions = predict_probabilities(
             model,

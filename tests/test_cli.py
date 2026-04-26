@@ -35,6 +35,7 @@ def _make_config(*, transform_profile: str = "baseline") -> SimpleNamespace:
             batch_size=2,
             num_workers=0,
             epochs=1,
+            backbone_name="efficientnet_b0",
             transform_profile=transform_profile,
             cache_mode="preprocess",
             learning_rate=1e-3,

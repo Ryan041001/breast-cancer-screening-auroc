@@ -26,6 +26,7 @@ ALLOWED_FUSION_ACTIVATIONS = ("gelu", "relu")
 ALLOWED_SCHEDULERS = ("none", "cosine")
 ALLOWED_CACHE_MODES = ("none", "preprocess")
 ALLOWED_EXTERNAL_SAMPLERS = ("none", "dataset_label_balanced")
+ALLOWED_SPLIT_GROUPINGS = ("patient", "breast")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,7 @@ class TrainConfig:
     image_size: int
     epochs: int
     num_workers: int
+    backbone_name: str = "efficientnet_b0"
     transform_profile: str = "baseline"
     fusion_head_variant: str = "linear"
     fusion_hidden_dim: int = 512
@@ -85,6 +87,7 @@ class TrainConfig:
     external_warmup_max_samples: int | None = None
     external_sampler: str = "none"
     fusion_eval_reference_run: str = "baseline"
+    split_grouping: str = "patient"
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +231,10 @@ def load_config(config_path: str | Path) -> AppConfig:
         allowed = ", ".join(ALLOWED_TRANSFORM_PROFILES)
         raise ValueError(f"Config key 'transform_profile' must be one of: {allowed}")
 
+    backbone_name = str(train_payload.get("backbone_name", "efficientnet_b0")).strip()
+    if not backbone_name:
+        raise ValueError("Config key 'backbone_name' must be a non-empty string")
+
     # --- fusion head settings (backward-compatible defaults) ---
     fusion_head_variant = str(train_payload.get("fusion_head_variant", "linear"))
     if fusion_head_variant not in ALLOWED_FUSION_HEAD_VARIANTS:
@@ -300,6 +307,11 @@ def load_config(config_path: str | Path) -> AppConfig:
     if external_sampler not in ALLOWED_EXTERNAL_SAMPLERS:
         allowed = ", ".join(ALLOWED_EXTERNAL_SAMPLERS)
         raise ValueError(f"Config key 'external_sampler' must be one of: {allowed}")
+
+    split_grouping = str(train_payload.get("split_grouping", "patient"))
+    if split_grouping not in ALLOWED_SPLIT_GROUPINGS:
+        allowed = ", ".join(ALLOWED_SPLIT_GROUPINGS)
+        raise ValueError(f"Config key 'split_grouping' must be one of: {allowed}")
 
     fusion_eval_reference_run = str(
         train_payload.get("fusion_eval_reference_run", "baseline")
@@ -461,6 +473,7 @@ def load_config(config_path: str | Path) -> AppConfig:
             image_size=_require_int_at_least(train_payload, "image_size", 1),
             epochs=_require_int_at_least(train_payload, "epochs", 1),
             num_workers=_require_int_at_least(train_payload, "num_workers", 0),
+            backbone_name=backbone_name,
             transform_profile=transform_profile,
             fusion_head_variant=fusion_head_variant,
             fusion_hidden_dim=fusion_hidden_dim,
@@ -484,5 +497,6 @@ def load_config(config_path: str | Path) -> AppConfig:
             external_warmup_max_samples=external_warmup_max_samples,
             external_sampler=external_sampler,
             fusion_eval_reference_run=fusion_eval_reference_run,
+            split_grouping=split_grouping,
         ),
     )

@@ -182,7 +182,9 @@ def test_run_cv_reports_startup_and_fold_progress(
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.assign_deterministic_folds",
-        lambda manifest, num_folds, seed: {"100_L": 0, "101_R": 1} if seed == 11 else (_ for _ in ()).throw(AssertionError("unexpected fold seed")),
+        lambda manifest, num_folds, seed, group_by: {"100_L": 0, "101_R": 1}
+        if seed == 11 and group_by == "patient"
+        else (_ for _ in ()).throw(AssertionError("unexpected fold assignment args")),
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.PairedBreastModel",
@@ -336,7 +338,9 @@ def test_run_cv_uses_configured_fusion_eval_reference_run(
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.assign_deterministic_folds",
-        lambda manifest, num_folds, seed: {"100_L": 0, "101_R": 1},
+        lambda manifest, num_folds, seed, group_by: {"100_L": 0, "101_R": 1}
+        if group_by == "patient"
+        else (_ for _ in ()).throw(AssertionError("unexpected split grouping")),
     )
     monkeypatch.setattr(
         "final_project.engine.run_cv.PairedBreastModel",

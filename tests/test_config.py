@@ -50,6 +50,7 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.runtime.warmup_seed is None
     assert config.train.batch_size == 2
     assert config.train.image_size == 384
+    assert config.train.backbone_name == "efficientnet_b0"
     assert config.train.transform_profile == "baseline"
     assert config.paths.external_data_root is None
     assert config.train.external_warmup_epochs == 0
@@ -59,6 +60,7 @@ def test_load_config_returns_expected_fields() -> None:
     assert config.train.cache_mode == "preprocess"
     assert config.train.external_sampler == "none"
     assert config.train.fusion_eval_reference_run == "baseline"
+    assert config.train.split_grouping == "patient"
 
 
 def test_load_config_loads_default_linear_fusion_head_values() -> None:
@@ -342,6 +344,7 @@ def test_load_config_rejects_unknown_transform_profile(tmp_path: Path) -> None:
         ("cache_mode", "preprocess"),
         ("external_sampler", "dataset_label_balanced"),
         ("fusion_eval_reference_run", "blend_best12_plus_baselinev2normaug_refined"),
+        ("split_grouping", "breast"),
     ],
 )
 def test_load_config_accepts_supported_training_controls(

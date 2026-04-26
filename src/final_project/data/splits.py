@@ -11,11 +11,14 @@ def assign_deterministic_folds(
     records: Sequence[BreastManifestRecord],
     num_folds: int,
     seed: int = 0,
+    group_by: str = "patient",
 ) -> dict[str, int]:
     if num_folds < 2:
         raise ValueError("num_folds must be at least 2")
+    if group_by not in {"patient", "breast"}:
+        raise ValueError("group_by must be either 'patient' or 'breast'")
 
-    patient_records: dict[str, list[BreastManifestRecord]] = defaultdict(list)
+    grouped_records: dict[str, list[BreastManifestRecord]] = defaultdict(list)
     seen_breast_ids: set[str] = set()
     for record in records:
         if record.breast_id in seen_breast_ids:
@@ -24,11 +27,16 @@ def assign_deterministic_folds(
             )
         _ = _require_training_label(record)
         seen_breast_ids.add(record.breast_id)
-        patient_records[_patient_id_from_breast_id(record.breast_id)].append(record)
+        group_id = (
+            _patient_id_from_breast_id(record.breast_id)
+            if group_by == "patient"
+            else record.breast_id
+        )
+        grouped_records[group_id].append(record)
 
     patient_groups = [
-        _build_patient_group(patient_id, grouped_records, seed)
-        for patient_id, grouped_records in patient_records.items()
+        _build_patient_group(group_id, records_in_group, seed)
+        for group_id, records_in_group in grouped_records.items()
     ]
     _validate_fold_feasibility(patient_groups, num_folds)
 
