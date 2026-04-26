@@ -4,35 +4,32 @@
 
 ## Current State
 
-- 当前第一单模:
-  `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4`
-  - `mean_auc = 0.967337`
-  - [metrics.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4/cv/metrics.json)
-- 当前 production blend:
-  `blend_best14_pruned_refined`
-  - `oof_auc = 0.97799770028811`
-  - [blend.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/blend_best14_pruned_refined/blend.json)
-  - [submission.csv](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/submissions/blend_best14_pruned_refined_submission.csv)
+- 当前最高单模 `splitv2`:
+  `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2`
+  - `mean_auc = 0.9699796059675092`
+  - `oof_auc = 0.9602718311132931`
+  - [metrics.json](outputs/runs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2/cv/metrics.json)
+- 当前推荐提交:
+  `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+  - `oof_auc = 0.9783852921796876`
+  - [blend.json](outputs/runs/blend_terminal_splitv2_plus_pairedlr8e4_refined/blend.json)
+  - [submission.csv](outputs/submissions/blend_terminal_splitv2_plus_pairedlr8e4_refined_submission.csv)
+  - [root copy](submission_recommended_splitv2_plus_pairedlr8e4.csv)
+- 当前旧宇宙 fallback:
+  `blend_terminal_old_universe_refined`
+  - `oof_auc = 0.9781914962338988`
+  - [blend.json](outputs/runs/blend_terminal_old_universe_refined/blend.json)
+- 当前绝对数值最高:
+  `blend_terminal_all_singles_from_splitv2_plus_refined`
+  - `oof_auc = 0.9810338367721347`
+  - mixed old-universe + splitv2 ceiling, not the default submission choice
 
-`best14` 来自对 `best13` 的迭代 leave-one-out prune，确认移除:
-- `f5_cosine`
-- `cv3_control_seed123`
+## Submission Logic
 
-对应报告:
-- [blend_best13_leave_one_out.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/blend_best13_leave_one_out.json)
-- [2026-04-16_model_bottleneck_report.md](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/2026-04-16_model_bottleneck_report.md)
-
-## Production vs Research
-
-- old universe:
-  production only
-  - 固定使用 `blend_best14_pruned_refined`
-  - 不再继续往旧宇宙里塞新成员、扫 LR、扫 epoch
-- splitv2 universe:
-  research only
-  - 使用新的 deterministic greedy splitter
-  - `fold_seed / train_seed / warmup_seed` 已解耦
-  - 只能在 splitv2 内部比较，不直接和旧宇宙 OOF 做数值对比
+- 推荐主提交使用 `splitv2` 单宇宙高分 blend:
+  `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+- `blend_terminal_old_universe_refined` 仍然是干净、稳妥的旧宇宙 fallback。
+- `blend_terminal_all_singles_from_splitv2_plus_refined` 只作为研究上限，因为它混合了 old-universe 和 splitv2。
 
 ## Splitv2 Status
 
@@ -55,24 +52,23 @@
 
 当前 splitv2 最佳池:
 
-- `new_champion_splitv2`
-- `f5_e5_cosine_splitv2`
-- `old_champion_splitv2`
-- `normaug_e4_splitv2`
+- `xfuse_e6_splitv2`
 - `mainline_v1_f5_splitv2`
+- `normaug_e4_splitv2`
+- `xfuse_e5_splitv2`
+- `f5_e5_cosine_splitv2_trainseed123`
+- `f5_e5_cosine_pairedlr8e4_splitv2`
 
 当前 splitv2 最佳 blend:
 
-- `blend_splitv2_stageD_refined`
-  - `oof_auc = 0.9755429516414516`
-- CLI 复现产物:
-  - `blend_splitv2_stageD_cli`
-  - `oof_auc = 0.9755429516414516`
+- `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+  - `oof_auc = 0.9783852921796876`
+  - relative to `blend_terminal_splitv2_refined`: `+0.00020671567550811787`
 
 对应文件:
-- [splitv2_stage_build.json](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/splitv2_stage_build.json)
-- [splitv2 pair eval](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/splitv2_pair_blend_eval.json)
-- [splitv2 stage-D blend](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/blend_splitv2_stageD_refined/blend.json)
+- [splitv2 candidate scan](outputs/research/2026-04-17_splitv2_candidate_scan.json)
+- [splitv2 plus spec](outputs/research/terminal_splitv2_plus_pairedlr8e4_blend_spec.json)
+- [splitv2 plus blend](outputs/runs/blend_terminal_splitv2_plus_pairedlr8e4_refined/blend.json)
 
 ## Warm-up Reuse
 
@@ -100,7 +96,7 @@ shared warm-up 目录:
 ```bash
 uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2.yaml
 uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine_splitv2.yaml
-uv run python main.py blend --spec outputs/research/splitv2_stageD_cli_spec.json
+uv run python main.py blend --spec outputs/research/terminal_splitv2_plus_pairedlr8e4_blend_spec.json
 ```
 
 `blend` 命令会输出:
@@ -112,7 +108,8 @@ uv run python main.py blend --spec outputs/research/splitv2_stageD_cli_spec.json
 
 ## Guardrails
 
-- 不把 splitv2 的 OOF 直接和旧宇宙 `best14` 做表面对比
+- 不把 mixed old-universe + splitv2 ceiling 直接当主提交版本
+- 不把 splitv2 的 OOF 和旧宇宙早期 frozen 结果做粗暴一对一对位
 - 不在 `fusion_head_variant: linear` 下继续扫 `fusion_hidden_dim`
 - 不把 `mainline_v1_f5` 升成主线
 - 不把 `external_paired_highconf` 提前升成主研究线

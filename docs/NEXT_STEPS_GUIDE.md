@@ -2,25 +2,27 @@
 
 ## Fixed Conclusions
 
-- 第一单模固定为:
-  `baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4`
-- 第一 production blend 固定为:
-  `blend_best14_pruned_refined`
+- 当前推荐提交固定为:
+  `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+- 旧宇宙 fallback 为:
+  `blend_terminal_old_universe_refined`
+- 绝对数值最高但不作为默认提交的是:
+  `blend_terminal_all_singles_from_splitv2_plus_refined`
 
 对应产物:
 
-- [best14 blend](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/runs/blend_best14_pruned_refined/blend.json)
-- [LOO report](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/blend_best13_leave_one_out.json)
-- [splitv2 pair eval](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/splitv2_pair_blend_eval.json)
-- [splitv2 stage build](/D:/A_ZJGSU/CODE/school/deep_learning/Final_Project/outputs/research/splitv2_stage_build.json)
+- [recommended splitv2 plus blend](../outputs/runs/blend_terminal_splitv2_plus_pairedlr8e4_refined/blend.json)
+- [splitv2 plus scan](../outputs/research/2026-04-17_splitv2_candidate_scan.json)
+- [splitv2 plus spec](../outputs/research/terminal_splitv2_plus_pairedlr8e4_blend_spec.json)
+- [mixed ceiling blend](../outputs/runs/blend_terminal_all_singles_from_splitv2_plus_refined/blend.json)
 
 ## Protocol That Was Actually Followed
 
-1. 对 `best13` 做 leave-one-out prune
-2. 实现 `splitter-v2`
-3. 把 `seed` 解耦为 `fold_seed / train_seed / warmup_seed`
-4. 在 splitv2 下重跑最小 5-fold 对照
-5. 用 staged refined blend 重建 splitv2 小池
+1. 在 `splitv2` 下重跑主单模与最小对照
+2. 提升 `xfuse` shard 进入 splitv2 终局池
+3. 用 terminal search 得到 `blend_terminal_splitv2_refined`
+4. 再加入 `pairedlr8e4_splitv2` shard
+5. 形成 `blend_terminal_splitv2_plus_pairedlr8e4_refined`
 
 协议内结论:
 
@@ -36,16 +38,17 @@
 
 当前 splitv2 best pool:
 
-- `new_champion_splitv2`
-- `f5_e5_cosine_splitv2`
-- `old_champion_splitv2`
-- `normaug_e4_splitv2`
+- `xfuse_e6_splitv2`
 - `mainline_v1_f5_splitv2`
+- `normaug_e4_splitv2`
+- `xfuse_e5_splitv2`
+- `f5_e5_cosine_splitv2_trainseed123`
+- `f5_e5_cosine_pairedlr8e4_splitv2`
 
 当前 splitv2 best blend:
 
-- `blend_splitv2_stageD_refined`
-  - `oof_auc = 0.9755429516414516`
+- `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+  - `oof_auc = 0.9783852921796876`
 
 当前 stopping rule:
 
@@ -55,8 +58,9 @@
 ## Evaluation Rules
 
 - split 改了，就是新的 CV 宇宙
-- 不把 splitv2 OOF 直接和旧宇宙 `best14` 做数值对位
-- 只看 splitv2 内部相对比较
+- 默认提交优先选择单宇宙高分 blend
+- mixed pool 只作为 ceiling，不直接当主提交
+- splitv2 内部比较优先，其次再看 old-universe fallback
 - 优先保留可解释、可复现、5-fold 的 diversity shard
 
 ## Do Not Do
@@ -72,15 +76,15 @@
 
 优先级顺序:
 
-1. 维持旧宇宙 production 冻结
-2. 在 splitv2 内继续小池式增量研究
-3. 只接受满足 `gain > 1e-4` 的新 5-fold 成员
-4. 优先增强 blend 工具链和测试，而不是重新大扫超参
+1. 默认提交使用 `blend_terminal_splitv2_plus_pairedlr8e4_refined`
+2. 保留 `blend_terminal_old_universe_refined` 作为 fallback
+3. mixed ceiling 只在需要研究上限时引用
+4. 后续只接受满足 `gain > 1e-4` 的新 5-fold 成员
 
 ## Commands
 
 ```bash
 uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e6_freeze1_cosine_pairedlr5e4_splitv2.yaml
 uv run python main.py run-cv --config configs/baseline_mammonet32k_warmup_e4_lr5e4_f5_e5_freeze1_cosine_splitv2.yaml
-uv run python main.py blend --spec outputs/research/splitv2_stageD_cli_spec.json
+uv run python main.py blend --spec outputs/research/terminal_splitv2_plus_pairedlr8e4_blend_spec.json
 ```
